@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
+import CryptoJS from 'crypto-js';
 import LogoMarkV from './imports/LogoMarkV1';
+import welcomeAudio from './assets/advertising-logo-199582.mp3';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Textarea } from './components/ui/textarea';
@@ -11,9 +14,10 @@ import { Login } from './components/Login';
 import { Dashboard } from './components/Dashboard';
 import { Toaster } from './components/ui/sonner';
 import { IconPlaceholder } from './components/IconPlaceholder';
-import RichTextEditor from './components/RichTextEditor';
+const RichTextEditor = lazy(() => import('./components/RichTextEditor'));
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from './components/ui/carousel';
-import { Check, Database, Zap, Shield, Server, Code, Package, Cloud, Snowflake, Archive, GitBranch, Code2, Layers, Github, Rss, Link2, Lock, Unlock } from 'lucide-react';
+import { Check, Database as DatabaseIcon, Zap, Shield, Server, Code, Package, Cloud, Snowflake, Archive, GitBranch, Code2, Layers, Github, Rss, Link2, Lock, Unlock } from 'lucide-react';
+import { CustomCursor } from './components/CustomCursor';
 
 const LottiePlayer = 'lottie-player' as any;
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
@@ -31,7 +35,44 @@ type Article = {
   authorAvatar: string;
 };
 
-const BLOG_EDITOR_PASSWORD = 'glacia-admin';
+type WaitlistEntry = {
+  id: string;
+  email: string;
+  timestamp: string;
+};
+
+const BLOG_EDITOR_PASSWORD_HASH = '1a7bf9ce919484c0709c54b0c9a263347813fcd77f67ed9f4f2d9b7381147554';
+const DB_ENCRYPTION_SECRET = 'e59680c4e9c618379cacd3cd8f6344e353d2177c4d2d5638b9070d41e1d52bbf';
+const DB_STORAGE_KEY = 'glacia_sqlite_db';
+const LEGACY_WAITLIST_STORAGE_KEY = 'waitlist';
+const LEGACY_ARTICLES_STORAGE_KEY = 'glaciaArticles';
+
+const getStoredWaitlistEntries = (): WaitlistEntry[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(LEGACY_WAITLIST_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (entry) =>
+          entry &&
+          typeof entry.email === 'string' &&
+          entry.email.trim().length > 0 &&
+          typeof entry.timestamp === 'string'
+      )
+      .map((entry) => ({
+        id: typeof entry.id === 'string' ? entry.id : crypto.randomUUID(),
+        email: entry.email,
+        timestamp: entry.timestamp,
+      }));
+  } catch (error) {
+    console.error('Failed to parse waitlist entries', error);
+    return [];
+  }
+};
+
 const createEmptyDraft = (): Omit<Article, 'id' | 'createdAt'> => ({
   title: '',
   contentHtml: '',
@@ -42,9 +83,188 @@ const createEmptyDraft = (): Omit<Article, 'id' | 'createdAt'> => ({
   authorAvatar: '',
 });
 
+const uint8ToBase64 = (data: Uint8Array) => {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < data.length; i += chunkSize) {
+    const chunk = data.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+};
+
+const base64ToUint8 = (base64: string) => {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+};
+
+const encryptBase64 = (base64: string) => {
+  return CryptoJS.AES.encrypt(base64, DB_ENCRYPTION_SECRET).toString();
+};
+
+const decryptToBase64 = (payload: string) => {
+  try {
+    const decrypted = CryptoJS.AES.decrypt(payload, DB_ENCRYPTION_SECRET).toString(CryptoJS.enc.Utf8);
+    if (!decrypted) {
+      return null;
+    }
+    return decrypted;
+  } catch (error) {
+    console.error('Failed to decrypt database payload', error);
+    return null;
+  }
+};
+
+const ensureSchema = (db: Database) => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS waitlist (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      timestamp TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS articles (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      contentHtml TEXT NOT NULL,
+      imageUrl TEXT,
+      videoUrl TEXT,
+      createdAt TEXT NOT NULL,
+      authorName TEXT NOT NULL,
+      authorTitle TEXT,
+      authorAvatar TEXT
+    );
+  `);
+};
+
+const loadWaitlistFromDb = (db: Database): WaitlistEntry[] => {
+  const entries: WaitlistEntry[] = [];
+  const stmt = db.prepare('SELECT id, email, timestamp FROM waitlist ORDER BY datetime(timestamp) DESC');
+  while (stmt.step()) {
+    const row = stmt.getAsObject() as Record<string, string>;
+    entries.push({
+      id: row.id,
+      email: row.email,
+      timestamp: row.timestamp,
+    });
+  }
+  stmt.free();
+  return entries;
+};
+
+const loadArticlesFromDb = (db: Database): Article[] => {
+  const results: Article[] = [];
+  const stmt = db.prepare(
+    'SELECT id, title, contentHtml, imageUrl, videoUrl, createdAt, authorName, authorTitle, authorAvatar FROM articles ORDER BY datetime(createdAt) DESC',
+  );
+  while (stmt.step()) {
+    const row = stmt.getAsObject() as Record<string, string>;
+    results.push({
+      id: row.id,
+      title: row.title,
+      contentHtml: row.contentHtml,
+      imageUrl: row.imageUrl ?? '',
+      videoUrl: row.videoUrl ?? '',
+      createdAt: row.createdAt,
+      authorName: row.authorName,
+      authorTitle: row.authorTitle ?? '',
+      authorAvatar: row.authorAvatar ?? '',
+    });
+  }
+  stmt.free();
+  return results;
+};
+
+const persistDatabase = (db: Database) => {
+  if (typeof window === 'undefined') return;
+  const data = db.export();
+  const base64 = uint8ToBase64(data);
+  const encrypted = encryptBase64(base64);
+  window.localStorage.setItem(DB_STORAGE_KEY, encrypted);
+};
+
+const getDatabaseBytes = (payload: string): { bytes: Uint8Array | null; legacy: boolean } => {
+  const decrypted = decryptToBase64(payload);
+  if (decrypted) {
+    return { bytes: base64ToUint8(decrypted), legacy: false };
+  }
+  try {
+    return { bytes: base64ToUint8(payload), legacy: true };
+  } catch (error) {
+    console.error('Stored database payload is invalid', error);
+    return { bytes: null, legacy: false };
+  }
+};
+
+const getLegacyArticles = (): Article[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const stored = window.localStorage.getItem(LEGACY_ARTICLES_STORAGE_KEY);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((article: any) => ({
+      id: typeof article.id === 'string' ? article.id : crypto.randomUUID(),
+      title: article.title || '',
+      contentHtml: article.contentHtml || article.content || '',
+      imageUrl: article.imageUrl || '',
+      videoUrl: article.videoUrl || '',
+      createdAt: article.createdAt || new Date().toISOString(),
+      authorName: article.authorName || 'Glacia Team',
+      authorTitle: article.authorTitle || 'Editorial',
+      authorAvatar: article.authorAvatar || '',
+    }));
+  } catch (error) {
+    console.error('Failed to parse legacy articles', error);
+    return [];
+  }
+};
+
+const migrateLegacyData = (db: Database) => {
+  const legacyWaitlist = getStoredWaitlistEntries();
+  if (legacyWaitlist.length) {
+    const insertWaitlist = db.prepare('INSERT OR IGNORE INTO waitlist (id, email, timestamp) VALUES (?, ?, ?)');
+    legacyWaitlist.forEach((entry) => {
+      insertWaitlist.run([entry.id, entry.email, entry.timestamp]);
+    });
+    insertWaitlist.free();
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(LEGACY_WAITLIST_STORAGE_KEY);
+    }
+  }
+
+  const legacyArticles = getLegacyArticles();
+  if (legacyArticles.length) {
+    const insertArticle = db.prepare(
+      'INSERT OR REPLACE INTO articles (id, title, contentHtml, imageUrl, videoUrl, createdAt, authorName, authorTitle, authorAvatar) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+    legacyArticles.forEach((article) => {
+      insertArticle.run([
+        article.id,
+        article.title,
+        article.contentHtml,
+        article.imageUrl,
+        article.videoUrl,
+        article.createdAt,
+        article.authorName,
+        article.authorTitle,
+        article.authorAvatar,
+      ]);
+    });
+    insertArticle.free();
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(LEGACY_ARTICLES_STORAGE_KEY);
+    }
+  }
+};
+
 export default function App() {
   const [email, setEmail] = useState('');
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [waitlistEntries, setWaitlistEntries] = useState<WaitlistEntry[]>([]);
   const [currentView, setCurrentView] = useState<View>('landing');
   const [showLottie, setShowLottie] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -57,6 +277,11 @@ export default function App() {
   const [isEditorUnlocked, setIsEditorUnlocked] = useState(false);
   const [showLockPrompt, setShowLockPrompt] = useState(false);
   const [pendingSection, setPendingSection] = useState<string | null>(null);
+  const [isDatabaseReady, setIsDatabaseReady] = useState(false);
+  const [databaseError, setDatabaseError] = useState<string | null>(null);
+  const [isImportingDatabase, setIsImportingDatabase] = useState(false);
+  const [isExportingDatabase, setIsExportingDatabase] = useState(false);
+  const [cursorVersion, setCursorVersion] = useState(0);
   const lenisRef = useRef<Lenis | null>(null);
   const sectionNodesRef = useRef<HTMLElement[]>([]);
   const isAutoScrollingRef = useRef(false);
@@ -65,20 +290,61 @@ export default function App() {
   const currentViewRef = useRef<View>('landing');
   const techSectionRef = useRef<HTMLDivElement | null>(null);
   const editorSectionRef = useRef<HTMLDivElement | null>(null);
+  const sqlJsRef = useRef<SqlJsStatic | null>(null);
+  const databaseRef = useRef<Database | null>(null);
+  const dbFileInputRef = useRef<HTMLInputElement | null>(null);
+  const welcomeAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const refreshWaitlistFromDb = useCallback(() => {
+    const db = databaseRef.current;
+    if (!db) return;
+    setWaitlistEntries(loadWaitlistFromDb(db));
+  }, []);
+
+  const refreshArticlesFromDb = useCallback(() => {
+    const db = databaseRef.current;
+    if (!db) return;
+    setArticles(loadArticlesFromDb(db));
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (email) {
-      // Store email in localStorage for now
-      const waitlist = JSON.parse(localStorage.getItem('waitlist') || '[]');
-      waitlist.push({ email, timestamp: new Date().toISOString() });
-      localStorage.setItem('waitlist', JSON.stringify(waitlist));
-      
-      setIsSubmitted(true);
-      toast.success('Successfully joined the waitlist!');
-      setEmail('');
-      setShowLottie(true);
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) return;
+
+    const db = databaseRef.current;
+    if (!db) {
+      toast.error('Database not ready yet');
+      return;
     }
+
+    const existsStmt = db.prepare('SELECT 1 FROM waitlist WHERE lower(email) = lower(?) LIMIT 1');
+    existsStmt.bind([trimmedEmail]);
+    const alreadyExists = existsStmt.step();
+    existsStmt.free();
+
+    if (alreadyExists) {
+      toast.message('This email is already on the waitlist');
+      setEmail('');
+      return;
+    }
+
+    const newEntry: WaitlistEntry = {
+      id: crypto.randomUUID(),
+      email: trimmedEmail,
+      timestamp: new Date().toISOString(),
+    };
+
+    const insertStmt = db.prepare('INSERT INTO waitlist (id, email, timestamp) VALUES (?, ?, ?)');
+    insertStmt.run([newEntry.id, newEntry.email, newEntry.timestamp]);
+    insertStmt.free();
+    persistDatabase(db);
+    refreshWaitlistFromDb();
+
+    setIsSubmitted(true);
+    toast.success('Successfully joined the waitlist!');
+    setEmail('');
+    setShowLottie(true);
   };
 
   const handleLogin = () => {
@@ -122,9 +388,228 @@ export default function App() {
     }
   };
 
+  const handleDatabaseDownload = () => {
+    const db = databaseRef.current;
+    if (!db) {
+      toast.error('Database not ready yet');
+      return;
+    }
+    setIsExportingDatabase(true);
+    try {
+      const data = db.export();
+      const binary = new Uint8Array(data);
+      const blob = new Blob([binary], { type: 'application/x-sqlite3' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `glacia-${new Date().toISOString().split('T')[0]}.sqlite`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to export database', error);
+      setDatabaseError('Failed to export database');
+      toast.error('Failed to export database');
+    } finally {
+      setIsExportingDatabase(false);
+    }
+  };
+
+  const handleDatabaseUploadClick = () => {
+    if (!sqlJsRef.current) {
+      toast.error('Database not ready yet');
+      return;
+    }
+    dbFileInputRef.current?.click();
+  };
+
+  const handleDatabaseFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !sqlJsRef.current) {
+      return;
+    }
+    setIsImportingDatabase(true);
+    try {
+      const buffer = await file.arrayBuffer();
+      const SQL = sqlJsRef.current;
+      const importedDb = new SQL.Database(new Uint8Array(buffer));
+      ensureSchema(importedDb);
+      databaseRef.current?.close();
+      databaseRef.current = importedDb;
+      persistDatabase(importedDb);
+      refreshWaitlistFromDb();
+      refreshArticlesFromDb();
+      setIsDatabaseReady(true);
+      setDatabaseError(null);
+      toast.success('Database imported successfully');
+    } catch (error) {
+      console.error('Failed to import database', error);
+      setDatabaseError('Failed to import database');
+      toast.error('Failed to import database');
+    } finally {
+      setIsImportingDatabase(false);
+      if (event.target) {
+        event.target.value = '';
+      }
+    }
+  };
+
   useEffect(() => {
     currentViewRef.current = currentView;
   }, [currentView]);
+
+  useEffect(() => {
+    if (currentView === 'landing') {
+      setCursorVersion((prev) => prev + 1);
+    }
+  }, [currentView]);
+
+  useEffect(() => {
+    const audio = new Audio(welcomeAudio);
+    audio.preload = 'auto';
+    welcomeAudioRef.current = audio;
+    return () => {
+      welcomeAudioRef.current?.pause();
+      welcomeAudioRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (currentView !== 'landing') return;
+    const audio = welcomeAudioRef.current;
+    if (!audio) return;
+
+    let isDisposed = false;
+
+    const detachInteractionHandlers = () => {
+      window.removeEventListener('pointerdown', handleInteraction);
+      window.removeEventListener('keydown', handleInteraction);
+    };
+
+    const handleInteraction = () => {
+      if (isDisposed) return;
+      detachInteractionHandlers();
+      audio.currentTime = 0;
+      audio.volume = 0.225;
+      audio.muted = false;
+      audio.play().catch((error) => {
+        console.warn('Failed to play welcome audio after interaction', error);
+        attachInteractionHandlers();
+      });
+    };
+
+    const attachInteractionHandlers = () => {
+      detachInteractionHandlers();
+      window.addEventListener('pointerdown', handleInteraction, { once: true });
+      window.addEventListener('keydown', handleInteraction, { once: true });
+    };
+
+    audio.currentTime = 0;
+    audio.volume = 0.225;
+    audio.muted = true;
+    audio.play()
+      .then(() => {
+        if (isDisposed) return;
+        setTimeout(() => {
+          if (!isDisposed) {
+            audio.muted = false;
+          }
+        }, 120);
+        detachInteractionHandlers();
+      })
+      .catch((error) => {
+        console.warn('Autoplay blocked for welcome audio, waiting for interaction', error);
+        audio.muted = false;
+        attachInteractionHandlers();
+      });
+
+    return () => {
+      isDisposed = true;
+      detachInteractionHandlers();
+    };
+  }, [currentView]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const initializeDatabase = async () => {
+      try {
+        const SQL = await initSqlJs({
+          locateFile: (file: string) => `/sql-wasm.wasm`,
+        });
+        if (isCancelled) return;
+
+        sqlJsRef.current = SQL;
+
+        const stored = typeof window !== 'undefined' ? window.localStorage.getItem(DB_STORAGE_KEY) : null;
+        let db: Database;
+        if (stored) {
+          const { bytes, legacy } = getDatabaseBytes(stored);
+          if (bytes) {
+            db = new SQL.Database(bytes);
+            ensureSchema(db);
+            if (legacy) {
+              persistDatabase(db);
+            }
+          } else {
+            db = new SQL.Database();
+            ensureSchema(db);
+            migrateLegacyData(db);
+            persistDatabase(db);
+          }
+        } else {
+          db = new SQL.Database();
+          ensureSchema(db);
+          migrateLegacyData(db);
+          persistDatabase(db);
+        }
+
+        databaseRef.current = db;
+        refreshWaitlistFromDb();
+        refreshArticlesFromDb();
+        setIsDatabaseReady(true);
+        setDatabaseError(null);
+      } catch (error) {
+        console.error('Failed to initialize database', error);
+        setDatabaseError('Unable to initialize local database');
+        toast.error('Failed to initialize database');
+      }
+    };
+
+    initializeDatabase();
+
+    return () => {
+      isCancelled = true;
+      databaseRef.current?.close();
+      databaseRef.current = null;
+    };
+  }, [refreshArticlesFromDb, refreshWaitlistFromDb]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === DB_STORAGE_KEY && event.newValue && sqlJsRef.current) {
+        try {
+          const { bytes } = getDatabaseBytes(event.newValue);
+          if (bytes) {
+            const newDb = new sqlJsRef.current.Database(bytes);
+            ensureSchema(newDb);
+            databaseRef.current?.close();
+            databaseRef.current = newDb;
+            refreshWaitlistFromDb();
+            refreshArticlesFromDb();
+            setIsDatabaseReady(true);
+          }
+        } catch (error) {
+          console.error('Failed to sync database across tabs', error);
+        }
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [refreshArticlesFromDb, refreshWaitlistFromDb]);
 
   const scrollToSection = (id: string) => {
     const section = document.getElementById(id);
@@ -255,32 +740,6 @@ export default function App() {
   }, [showLottie]);
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('glaciaArticles');
-      if (stored) {
-        const parsed: Article[] = JSON.parse(stored).map((article: any) => ({
-          id: article.id,
-          title: article.title || '',
-          contentHtml: article.contentHtml || article.content || '',
-          imageUrl: article.imageUrl || '',
-          videoUrl: article.videoUrl || '',
-          createdAt: article.createdAt || new Date().toISOString(),
-          authorName: article.authorName || 'Glacia Team',
-          authorTitle: article.authorTitle || 'Editorial',
-          authorAvatar: article.authorAvatar || '',
-        }));
-        setArticles(parsed);
-      }
-    } catch (error) {
-      console.error('Failed to load blog articles', error);
-    }
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem('glaciaArticles', JSON.stringify(articles));
-  }, [articles]);
-
-  useEffect(() => {
     if (typeof window === 'undefined') return;
     const handleWheel = (event: WheelEvent) => {
       if (isAutoScrollingRef.current) {
@@ -371,7 +830,7 @@ export default function App() {
     { label: 'Product', target: 'showcase' },
   ];
 
-  const lucideIcons = { Check, Database, Zap, Shield, Server, Code, Package, Cloud };
+  const lucideIcons = { Check, Database: DatabaseIcon, Zap, Shield, Server, Code, Package, Cloud };
 
   const features = [
     {
@@ -452,7 +911,13 @@ export default function App() {
   ];
 
   const handleUnlockEditor = () => {
-    if (editorPassword.trim() === BLOG_EDITOR_PASSWORD) {
+    const trimmed = editorPassword.trim();
+    if (!trimmed) {
+      toast.error('Password required');
+      return;
+    }
+    const hashedInput = CryptoJS.SHA256(trimmed).toString();
+    if (hashedInput === BLOG_EDITOR_PASSWORD_HASH) {
       setIsEditorUnlocked(true);
       setShowLockPrompt(false);
       setEditorPassword('');
@@ -482,6 +947,13 @@ export default function App() {
       toast.error('Author name is required');
       return;
     }
+
+    const db = databaseRef.current;
+    if (!db) {
+      toast.error('Database not ready yet');
+      return;
+    }
+
     const newArticle: Article = {
       id: editingArticleId ?? crypto.randomUUID(),
       title: articleDraft.title.trim(),
@@ -495,20 +967,93 @@ export default function App() {
       authorTitle: articleDraft.authorTitle.trim() || 'Contributor',
       authorAvatar: articleDraft.authorAvatar.trim(),
     };
-    setArticles((prev) => {
-      if (editingArticleId) {
-        return prev.map((article) => (article.id === editingArticleId ? newArticle : article));
-      }
-      return [newArticle, ...prev];
-    });
+
+    if (editingArticleId) {
+      const updateStmt = db.prepare(
+        `UPDATE articles
+         SET title = ?, contentHtml = ?, imageUrl = ?, videoUrl = ?, createdAt = ?, authorName = ?, authorTitle = ?, authorAvatar = ?
+         WHERE id = ?`,
+      );
+      updateStmt.run([
+        newArticle.title,
+        newArticle.contentHtml,
+        newArticle.imageUrl,
+        newArticle.videoUrl,
+        newArticle.createdAt,
+        newArticle.authorName,
+        newArticle.authorTitle,
+        newArticle.authorAvatar,
+        newArticle.id,
+      ]);
+      updateStmt.free();
+    } else {
+      const insertStmt = db.prepare(
+        `INSERT INTO articles
+        (id, title, contentHtml, imageUrl, videoUrl, createdAt, authorName, authorTitle, authorAvatar)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      insertStmt.run([
+        newArticle.id,
+        newArticle.title,
+        newArticle.contentHtml,
+        newArticle.imageUrl,
+        newArticle.videoUrl,
+        newArticle.createdAt,
+        newArticle.authorName,
+        newArticle.authorTitle,
+        newArticle.authorAvatar,
+      ]);
+      insertStmt.free();
+    }
+
+    persistDatabase(db);
+    refreshArticlesFromDb();
+
     setArticleDraft(createEmptyDraft());
     setEditingArticleId(null);
     toast.success(editingArticleId ? 'Article updated' : 'Article published');
   };
 
+  const handleDeleteArticle = (articleId: string) => {
+    const db = databaseRef.current;
+    if (!db) {
+      toast.error('Database not ready yet');
+      return;
+    }
+    const deleteStmt = db.prepare('DELETE FROM articles WHERE id = ?');
+    deleteStmt.run([articleId]);
+    deleteStmt.free();
+    persistDatabase(db);
+    refreshArticlesFromDb();
+    if (editingArticleId === articleId) {
+      setArticleDraft(createEmptyDraft());
+      setEditingArticleId(null);
+    }
+    toast.success('Article deleted');
+  };
+
+  const handleClearWaitlist = () => {
+    const db = databaseRef.current;
+    if (!db) {
+      toast.error('Database not ready yet');
+      return;
+    }
+    const deleteStmt = db.prepare('DELETE FROM waitlist');
+    deleteStmt.run();
+    deleteStmt.free();
+    persistDatabase(db);
+    refreshWaitlistFromDb();
+    toast.success('Waitlist cleared');
+  };
+
   const formatArticleDate = (isoDate: string) => {
     const date = new Date(isoDate);
     return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  const formatWaitlistTimestamp = (isoDate: string) => {
+    const date = new Date(isoDate);
+    return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   };
 
   const getInitials = (name: string) => {
@@ -542,6 +1087,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-white to-blue-50/40">
+      <CustomCursor key={cursorVersion} enabled={currentView === 'landing'} />
       {currentView === 'landing' && showQuickLinks && (
         <>
           <div className="fixed bottom-6 right-6 z-40 hidden sm:flex flex-col items-end gap-2 transition duration-300">
@@ -1164,6 +1710,58 @@ export default function App() {
             </motion.div>
 
             <div className="max-w-5xl mx-auto space-y-8">
+              {isEditorUnlocked && (
+                <Card className="p-6 border-blue-100 bg-white/90 backdrop-blur">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.4em] text-blue-600">Waitlist</p>
+                      <h2 className="text-xl font-semibold text-slate-900">Waitlist entries</h2>
+                      <p className="text-sm text-slate-500">Captured emails from the public signup form.</p>
+                    </div>
+                    <div className="flex flex-col items-stretch gap-2 sm:items-end">
+                      <span className="text-sm font-semibold text-blue-700">
+                        {waitlistEntries.length} {waitlistEntries.length === 1 ? 'entry' : 'entries'}
+                      </span>
+                      {waitlistEntries.length > 0 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="text-red-600 border-red-200 hover:bg-red-50"
+                          onClick={() => {
+                            if (confirm('Delete all waitlist entries?')) {
+                              handleClearWaitlist();
+                            }
+                          }}
+                        >
+                          Clear waitlist
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-4 rounded-2xl border border-slate-100 overflow-hidden">
+                    {waitlistEntries.length ? (
+                      <div className="divide-y divide-slate-100">
+                        {waitlistEntries.map((entry) => (
+                          <div
+                            key={entry.id}
+                            className="grid gap-3 px-4 py-3 text-sm bg-white/70 sm:grid-cols-[2fr,1fr]"
+                          >
+                            <span className="font-medium text-slate-900 break-words">{entry.email}</span>
+                            <span className="text-slate-500 sm:text-right">
+                              {formatWaitlistTimestamp(entry.timestamp)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="py-6 text-center text-sm text-slate-500">
+                        No waitlist entries yet. Captured emails appear here automatically.
+                      </div>
+                    )}
+                  </div>
+                </Card>
+              )}
               {articles.length === 0 ? (
                 <Card className="p-8 text-center bg-white/80 backdrop-blur border border-slate-100 shadow-sm">
                   <p className="text-slate-500">No articles yet. Check back soon for fresh updates.</p>
@@ -1204,23 +1802,19 @@ export default function App() {
                               >
                                 Edit
                               </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                className="text-red-600 border-red-200 hover:bg-red-50"
-                                onClick={() => {
-                                  if (confirm('Delete this article?')) {
-                                    setArticles((prev) => prev.filter((a) => a.id !== article.id));
-                                    if (editingArticleId === article.id) {
-                                      setArticleDraft(createEmptyDraft());
-                                      setEditingArticleId(null);
-                                    }
-                                  }
-                                }}
-                              >
-                                Delete
-                              </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="text-red-600 border-red-200 hover:bg-red-50"
+                                    onClick={() => {
+                                      if (confirm('Delete this article?')) {
+                                        handleDeleteArticle(article.id);
+                                      }
+                                    }}
+                                  >
+                                    Delete
+                                  </Button>
                             </div>
                           )}
                         </div>
@@ -1296,11 +1890,19 @@ export default function App() {
                       </div>
                       <div className="grid gap-2">
                         <label className="text-sm font-medium text-slate-700">Content</label>
-                        <RichTextEditor
-                          value={articleDraft.contentHtml}
-                          onChange={(html) => setArticleDraft((prev) => ({ ...prev, contentHtml: html }))}
-                          placeholder="Write your story..."
-                        />
+                        <Suspense
+                          fallback={
+                            <div className="min-h-[200px] rounded-2xl border border-slate-200 bg-white/50 p-4 text-sm text-slate-500 animate-pulse">
+                              Loading editor…
+                            </div>
+                          }
+                        >
+                          <RichTextEditor
+                            value={articleDraft.contentHtml}
+                            onChange={(html) => setArticleDraft((prev) => ({ ...prev, contentHtml: html }))}
+                            placeholder="Write your story..."
+                          />
+                        </Suspense>
                       </div>
                       <div className="grid gap-2">
                         <label className="text-sm font-medium text-slate-700">Image URL (optional)</label>
@@ -1350,9 +1952,53 @@ export default function App() {
                     <Button type="submit" className="bg-blue-600 text-white hover:bg-blue-700">
                       {editingArticleId ? 'Update Article' : 'Publish Article'}
                     </Button>
-                  </form>
-                </div>
+          </form>
+          <Card className="border border-slate-200 bg-white/70 p-5 shadow-sm">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="font-medium text-slate-900">Database Tools</h3>
+                <p className="text-sm text-slate-500">
+                  Download a backup of the SQLite database or upload a saved copy.
+                </p>
+              </div>
+              {databaseError && (
+                <p className="text-sm text-red-600">
+                  {databaseError}
+                </p>
               )}
+            </div>
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleDatabaseDownload}
+                disabled={!isDatabaseReady || isExportingDatabase}
+                className="flex-1"
+              >
+                {isExportingDatabase ? 'Preparing download...' : 'Download .sqlite'}
+              </Button>
+              <Button
+                type="button"
+                onClick={handleDatabaseUploadClick}
+                disabled={!isDatabaseReady || isImportingDatabase}
+                className="flex-1 bg-slate-900 text-white hover:bg-slate-800"
+              >
+                {isImportingDatabase ? 'Importing...' : 'Upload Backup'}
+              </Button>
+            </div>
+            <p className="mt-3 text-xs text-slate-500">
+              Uploading replaces the current waitlist and articles with the contents of the selected database file.
+            </p>
+            <input
+              ref={dbFileInputRef}
+              type="file"
+              accept=".sqlite,.db,application/x-sqlite3"
+              className="hidden"
+              onChange={handleDatabaseFileChange}
+            />
+          </Card>
+        </div>
+      )}
               </div>
             </div>
           </div>
