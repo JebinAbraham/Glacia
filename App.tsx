@@ -1,22 +1,70 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import LogoMarkV from './imports/LogoMarkV1';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
+import { Textarea } from './components/ui/textarea';
 import { Card } from './components/ui/card';
 import { toast } from 'sonner';
-import { motion } from 'motion/react';
-import { ImageWithFallback } from './components/figma/ImageWithFallback';
+import { motion, AnimatePresence } from 'motion/react';
+import Lenis from 'lenis';
 import { Login } from './components/Login';
 import { Dashboard } from './components/Dashboard';
 import { Toaster } from './components/ui/sonner';
 import { IconPlaceholder } from './components/IconPlaceholder';
+import RichTextEditor from './components/RichTextEditor';
+import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from './components/ui/carousel';
+import { Check, Database, Zap, Shield, Server, Code, Package, Cloud, Snowflake, Archive, GitBranch, Code2, Layers, Github, Rss, Link2, Lock, Unlock } from 'lucide-react';
 
-type View = 'landing' | 'login' | 'dashboard';
+const LottiePlayer = 'lottie-player' as any;
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+type View = 'landing' | 'login' | 'dashboard' | 'blog';
+type Article = {
+  id: string;
+  title: string;
+  contentHtml: string;
+  imageUrl: string;
+  videoUrl: string;
+  createdAt: string;
+  authorName: string;
+  authorTitle: string;
+  authorAvatar: string;
+};
+
+const BLOG_EDITOR_PASSWORD = 'glacia-admin';
+const createEmptyDraft = (): Omit<Article, 'id' | 'createdAt'> => ({
+  title: '',
+  contentHtml: '',
+  imageUrl: '',
+  videoUrl: '',
+  authorName: '',
+  authorTitle: '',
+  authorAvatar: '',
+});
 
 export default function App() {
   const [email, setEmail] = useState('');
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [currentView, setCurrentView] = useState<View>('landing');
+  const [showLottie, setShowLottie] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showQuickLinks, setShowQuickLinks] = useState(false);
+  const [mobileLinksOpen, setMobileLinksOpen] = useState(false);
+  const [articles, setArticles] = useState<Article[]>([]);
+  const [articleDraft, setArticleDraft] = useState<Omit<Article, 'id' | 'createdAt'>>(() => createEmptyDraft());
+  const [editingArticleId, setEditingArticleId] = useState<string | null>(null);
+  const [editorPassword, setEditorPassword] = useState('');
+  const [isEditorUnlocked, setIsEditorUnlocked] = useState(false);
+  const [showLockPrompt, setShowLockPrompt] = useState(false);
+  const [pendingSection, setPendingSection] = useState<string | null>(null);
+  const lenisRef = useRef<Lenis | null>(null);
+  const sectionNodesRef = useRef<HTMLElement[]>([]);
+  const isAutoScrollingRef = useRef(false);
+  const scrollLockTimeoutRef = useRef<number | undefined>(undefined);
+  const touchStartYRef = useRef(0);
+  const currentViewRef = useRef<View>('landing');
+  const techSectionRef = useRef<HTMLDivElement | null>(null);
+  const editorSectionRef = useRef<HTMLDivElement | null>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,6 +77,7 @@ export default function App() {
       setIsSubmitted(true);
       toast.success('Successfully joined the waitlist!');
       setEmail('');
+      setShowLottie(true);
     }
   };
 
@@ -50,6 +99,261 @@ export default function App() {
     setCurrentView('landing');
   };
 
+  const handleGoToBlog = () => {
+    if (currentView !== 'blog') {
+      setCurrentView('blog');
+    }
+    setIsMenuOpen(false);
+    setPendingSection(null);
+    if (lenisRef.current) {
+      lenisRef.current.scrollTo(0, { duration: 0.9, easing: (t: number) => 1 - Math.pow(2, -10 * t) });
+    } else {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const scrollToEditor = () => {
+    const section = editorSectionRef.current;
+    if (!section) return;
+    if (lenisRef.current) {
+      lenisRef.current.scrollTo(section, { offset: -80, duration: 0.9, easing: (t: number) => 1 - Math.pow(2, -10 * t) });
+    } else {
+      section.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
+
+  useEffect(() => {
+    currentViewRef.current = currentView;
+  }, [currentView]);
+
+  const scrollToSection = (id: string) => {
+    const section = document.getElementById(id);
+    if (section) {
+      if (lenisRef.current) {
+        lenisRef.current.scrollTo(section, { offset: -90, duration: 1.1 });
+      } else {
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+  };
+
+  const handleNavClick = (id: string) => {
+    if (currentView !== 'landing') {
+      setPendingSection(id);
+      setCurrentView('landing');
+      setIsMenuOpen(false);
+      return;
+    }
+    scrollToSection(id);
+    setIsMenuOpen(false);
+  };
+
+  useEffect(() => {
+    if (pendingSection && currentView === 'landing') {
+      const sectionId = pendingSection;
+      requestAnimationFrame(() => {
+        scrollToSection(sectionId);
+      });
+      setPendingSection(null);
+    }
+  }, [pendingSection, currentView]);
+
+  const triggerSectionSnap = useCallback((delta: number) => {
+    if (typeof window === 'undefined') return false;
+    if (currentViewRef.current !== 'landing') return false;
+    const sections = sectionNodesRef.current;
+    if (!sections.length || delta === 0) return false;
+
+    const direction = delta > 0 ? 1 : -1;
+    const currentScroll = window.scrollY;
+    let closestIndex = 0;
+    let smallestDistance = Number.POSITIVE_INFINITY;
+
+    sections.forEach((section, index) => {
+      const top = section.getBoundingClientRect().top + window.scrollY;
+      const distance = Math.abs(top - 120 - currentScroll);
+      if (distance < smallestDistance) {
+        smallestDistance = distance;
+        closestIndex = index;
+      }
+    });
+
+    const targetIndex = clamp(closestIndex + direction, 0, sections.length - 1);
+    if (targetIndex === closestIndex) return false;
+
+    const easing = (t: number) => 1 - Math.pow(2, -10 * t);
+    const target = sections[targetIndex];
+
+    if (lenisRef.current) {
+      lenisRef.current.scrollTo(target, { offset: -90, duration: 1.15, easing });
+    } else {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    isAutoScrollingRef.current = true;
+    if (scrollLockTimeoutRef.current) {
+      window.clearTimeout(scrollLockTimeoutRef.current);
+    }
+    scrollLockTimeoutRef.current = window.setTimeout(() => {
+      isAutoScrollingRef.current = false;
+    }, 1300);
+
+    return true;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const updateSections = () => {
+      if (currentView !== 'landing') {
+        sectionNodesRef.current = [];
+        return;
+      }
+      sectionNodesRef.current = Array.from(document.querySelectorAll<HTMLElement>('[data-snap-section="true"]'));
+    };
+    updateSections();
+    window.addEventListener('resize', updateSections);
+    return () => window.removeEventListener('resize', updateSections);
+  }, [currentView]);
+
+  useEffect(() => {
+    const lenis = new Lenis({
+      duration: 1.1,
+      smoothWheel: true,
+      touchMultiplier: 1.15,
+      easing: (t: number) => 1 - Math.pow(2, -10 * t)
+    });
+    lenisRef.current = lenis;
+    let frameId: number;
+    const raf = (time: number) => {
+      lenis.raf(time);
+      frameId = requestAnimationFrame(raf);
+    };
+    frameId = requestAnimationFrame(raf);
+
+    return () => {
+      cancelAnimationFrame(frameId);
+      lenis.destroy();
+      lenisRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const scriptId = 'lottie-player-script';
+    if (!document.getElementById(scriptId)) {
+      const script = document.createElement('script');
+      script.id = scriptId;
+      script.src = 'https://unpkg.com/@lottiefiles/lottie-player@latest/dist/lottie-player.js';
+      script.type = 'module';
+      document.head.appendChild(script);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!showLottie) return;
+    const timeout = window.setTimeout(() => setShowLottie(false), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [showLottie]);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('glaciaArticles');
+      if (stored) {
+        const parsed: Article[] = JSON.parse(stored).map((article: any) => ({
+          id: article.id,
+          title: article.title || '',
+          contentHtml: article.contentHtml || article.content || '',
+          imageUrl: article.imageUrl || '',
+          videoUrl: article.videoUrl || '',
+          createdAt: article.createdAt || new Date().toISOString(),
+          authorName: article.authorName || 'Glacia Team',
+          authorTitle: article.authorTitle || 'Editorial',
+          authorAvatar: article.authorAvatar || '',
+        }));
+        setArticles(parsed);
+      }
+    } catch (error) {
+      console.error('Failed to load blog articles', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('glaciaArticles', JSON.stringify(articles));
+  }, [articles]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleWheel = (event: WheelEvent) => {
+      if (isAutoScrollingRef.current) {
+        event.preventDefault();
+        return;
+      }
+      if (Math.abs(event.deltaY) < 40) return;
+      if (triggerSectionSnap(event.deltaY)) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener('wheel', handleWheel, { passive: false });
+    return () => window.removeEventListener('wheel', handleWheel);
+  }, [triggerSectionSnap]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleTouchStart = (event: TouchEvent) => {
+      touchStartYRef.current = event.touches[0]?.clientY ?? 0;
+    };
+    const handleTouchEnd = (event: TouchEvent) => {
+      const endY = event.changedTouches[0]?.clientY ?? 0;
+      const deltaY = touchStartYRef.current - endY;
+      if (Math.abs(deltaY) < 50) return;
+      if (triggerSectionSnap(deltaY)) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener('touchstart', handleTouchStart, { passive: true });
+    window.addEventListener('touchend', handleTouchEnd, { passive: false });
+    return () => {
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [triggerSectionSnap]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollLockTimeoutRef.current) {
+        window.clearTimeout(scrollLockTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (currentView !== 'landing') return;
+    const node = techSectionRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setShowQuickLinks(entry.isIntersecting || entry.boundingClientRect.top < 0);
+      },
+      { threshold: 0.2 }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [currentView]);
+
+  useEffect(() => {
+    if (!showQuickLinks) {
+      setMobileLinksOpen(false);
+    }
+  }, [showQuickLinks]);
+
+  useEffect(() => {
+    if (currentView !== 'landing') {
+      setShowQuickLinks(false);
+    }
+    if (currentView !== 'blog') {
+      setShowLockPrompt(false);
+    }
+  }, [currentView]);
+
   // Render Login Page
   if (currentView === 'login') {
     return <Login onLogin={handleLoginSuccess} onBack={handleBackToLanding} />;
@@ -61,46 +365,434 @@ export default function App() {
   }
 
   // Render Landing Page
+  const navLinks = [
+    { label: 'Home', target: 'hero' },
+    { label: 'Features', target: 'features' },
+    { label: 'Product', target: 'showcase' },
+  ];
+
+  const lucideIcons = { Check, Database, Zap, Shield, Server, Code, Package, Cloud };
+
   const features = [
     {
-      iconLabel: 'OWN',
+      icon: lucideIcons.Server,
       title: 'Own Your Infrastructure',
       description: 'Take control of your data storage with plug-and-play installation on your own infrastructure.'
     },
     {
-      iconLabel: 'SET',
+      icon: lucideIcons.Zap,
       title: 'Effortless Setup',
       description: 'Get up and running in minutes with our streamlined installation process.'
     },
     {
-      iconLabel: 'SEC',
+      icon: lucideIcons.Shield,
       title: 'Secure & Private',
       description: 'Your memories stay on your infrastructure, ensuring complete privacy and security.'
     },
     {
-      iconLabel: 'CST',
+      icon: lucideIcons.Package,
       title: 'Cost Efficient',
       description: 'Stop paying premium prices for cloud storage. Control costs with your own infrastructure.'
     }
   ];
 
+  const glaciaLetters = ['G', 'l', 'a', 'c', 'i', 'a'];
+  const wordReveal = {
+    hidden: { opacity: 0, y: 30, filter: 'blur(12px)' },
+    visible: {
+      opacity: 1,
+      y: 0,
+      filter: 'blur(0px)',
+      transition: { duration: 0.8, delay: 0.2, ease: [0.22, 1, 0.36, 1] as const, staggerChildren: 0.08 }
+    }
+  };
+  const letterLazy = {
+    hidden: { opacity: 0, y: 40, filter: 'blur(18px)' },
+    visible: {
+      opacity: 1,
+      y: 0,
+      filter: 'blur(0px)',
+      transition: { duration: 0.9, ease: [0.4, 0, 0.2, 1] as const }
+    }
+  };
+
   const technologies = [
-    { name: 'Docker', label: 'DCK' },
-    { name: 'Kubernetes', label: 'K8S' },
-    { name: 'PostgreSQL', label: 'PSQL' },
-    { name: 'Redis', label: 'RDS' },
-    { name: 'Node.js', label: 'NJS' },
-    { name: 'React', label: 'RCT' },
+    { name: 'AWS Glacier Deep Archive', icon: Snowflake },
+    { name: 'Amazon S3 Buckets', icon: Archive },
+    { name: 'Terraform Infrastructure as Code', icon: Layers },
+    { name: 'GitOps Workflows', icon: GitBranch },
+    { name: 'Dockerized Microservices', icon: Package },
+    { name: 'TypeScript Runtime Safety', icon: Code2 },
   ];
+
+  const showcaseVideos = [
+    {
+      title: 'Mobile & Desktop Views',
+      description: 'Switch seamlessly between responsive layouts optimized for every device.',
+      src: '',
+      poster: ''
+    },
+    {
+      title: 'Secure Encryption',
+      description: 'Layered encryption keeps your archives locked behind your own infra.',
+      src: '',
+      poster: ''
+    },
+    {
+      title: 'Transparent Billing',
+      description: 'Only pay for what you store—no surprise fees or dark patterns.',
+      src: '',
+      poster: ''
+    }
+  ];
+
+  const quickLinks = [
+    { label: 'GitHub', href: 'https://github.com/JebinAbraham/Glacia', icon: Github },
+    { label: 'Blog', icon: Rss, action: handleGoToBlog },
+  ];
+
+  const handleUnlockEditor = () => {
+    if (editorPassword.trim() === BLOG_EDITOR_PASSWORD) {
+      setIsEditorUnlocked(true);
+      setShowLockPrompt(false);
+      setEditorPassword('');
+      toast.success('Editor unlocked');
+      setTimeout(() => scrollToEditor(), 100);
+    } else {
+      toast.error('Incorrect password');
+    }
+  };
+
+  const handleLockEditor = () => {
+    setIsEditorUnlocked(false);
+    setEditorPassword('');
+    setShowLockPrompt(false);
+    setArticleDraft(createEmptyDraft());
+    setEditingArticleId(null);
+    toast.message('Editor locked');
+  };
+
+  const handlePublishArticle = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!articleDraft.title.trim() || !articleDraft.contentHtml.trim()) {
+      toast.error('Title and content are required');
+      return;
+    }
+    if (!articleDraft.authorName.trim()) {
+      toast.error('Author name is required');
+      return;
+    }
+    const newArticle: Article = {
+      id: editingArticleId ?? crypto.randomUUID(),
+      title: articleDraft.title.trim(),
+      contentHtml: articleDraft.contentHtml.trim(),
+      imageUrl: articleDraft.imageUrl.trim(),
+      videoUrl: articleDraft.videoUrl.trim(),
+      createdAt: editingArticleId
+        ? articles.find((a) => a.id === editingArticleId)?.createdAt ?? new Date().toISOString()
+        : new Date().toISOString(),
+      authorName: articleDraft.authorName.trim(),
+      authorTitle: articleDraft.authorTitle.trim() || 'Contributor',
+      authorAvatar: articleDraft.authorAvatar.trim(),
+    };
+    setArticles((prev) => {
+      if (editingArticleId) {
+        return prev.map((article) => (article.id === editingArticleId ? newArticle : article));
+      }
+      return [newArticle, ...prev];
+    });
+    setArticleDraft(createEmptyDraft());
+    setEditingArticleId(null);
+    toast.success(editingArticleId ? 'Article updated' : 'Article published');
+  };
+
+  const formatArticleDate = (isoDate: string) => {
+    const date = new Date(isoDate);
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  const getInitials = (name: string) => {
+    if (!name) return 'GL';
+    return name
+      .split(' ')
+      .map((n) => n[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase();
+  };
+
+  const handleFloatingLockClick = () => {
+    if (currentView !== 'blog') {
+      handleGoToBlog();
+      setTimeout(() => {
+        scrollToEditor();
+        if (!isEditorUnlocked) {
+          setShowLockPrompt(true);
+        }
+      }, 400);
+      return;
+    }
+    if (isEditorUnlocked) {
+      handleLockEditor();
+    } else {
+      scrollToEditor();
+      setShowLockPrompt((prev) => !prev);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-white to-blue-50/40">
+      {currentView === 'landing' && showQuickLinks && (
+        <>
+          <div className="fixed bottom-6 right-6 z-40 hidden sm:flex flex-col items-end gap-2 transition duration-300">
+            {quickLinks.map((link) => {
+              const LinkIcon = link.icon;
+              const isAction = typeof link.action === 'function';
+              const commonClasses = "group flex items-center gap-2 rounded-full border border-white/60 bg-white/70 px-4 py-2 text-sm font-medium text-slate-800 shadow-[0_10px_30px_rgba(15,23,42,0.1)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-white";
+              if (isAction) {
+                return (
+                  <button
+                    key={link.label}
+                    type="button"
+                    onClick={link.action}
+                    className={commonClasses}
+                  >
+                    <LinkIcon className="size-4 text-blue-600" strokeWidth={1.6} />
+                    <span>{link.label}</span>
+                  </button>
+                );
+              }
+              return (
+                <a
+                  key={link.label}
+                  href={link.href}
+                  target={link.href?.startsWith('http') ? '_blank' : undefined}
+                  rel={link.href?.startsWith('http') ? 'noreferrer' : undefined}
+                  className={commonClasses}
+                >
+                  <LinkIcon className="size-4 text-blue-600" strokeWidth={1.6} />
+                  <span>{link.label}</span>
+                </a>
+              );
+            })}
+          </div>
+          <div className="fixed bottom-5 right-5 z-40 sm:hidden">
+            <button
+              type="button"
+              aria-expanded={mobileLinksOpen}
+              onClick={() => setMobileLinksOpen((prev) => !prev)}
+              className="flex size-14 items-center justify-center rounded-full border border-white/60 bg-white/70 text-slate-900 shadow-[0_10px_30px_rgba(15,23,42,0.12)] backdrop-blur-2xl transition active:scale-95"
+            >
+              <Link2 className="size-6 text-blue-600" strokeWidth={1.6} />
+            </button>
+            {mobileLinksOpen && (
+              <div className="mt-3 space-y-2 rounded-2xl border border-white/60 bg-white/80 p-3 shadow-[0_15px_35px_rgba(15,23,42,0.15)] backdrop-blur-2xl">
+                {quickLinks.map((link) => {
+                  const LinkIcon = link.icon;
+                  const baseClasses = "flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-slate-800 transition hover:bg-white w-full text-left";
+                  if (typeof link.action === 'function') {
+                    return (
+                      <button
+                        key={`mobile-${link.label}`}
+                        type="button"
+                        onClick={() => {
+                          link.action?.();
+                          setMobileLinksOpen(false);
+                        }}
+                        className={baseClasses}
+                      >
+                        <LinkIcon className="size-4 text-blue-600" strokeWidth={1.6} />
+                        <span>{link.label}</span>
+                      </button>
+                    );
+                  }
+                  return (
+                    <a
+                      key={`mobile-${link.label}`}
+                      href={link.href}
+                      target={link.href?.startsWith('http') ? '_blank' : undefined}
+                      rel={link.href?.startsWith('http') ? 'noreferrer' : undefined}
+                      className={baseClasses}
+                      onClick={() => setMobileLinksOpen(false)}
+                    >
+                      <LinkIcon className="size-4 text-blue-600" strokeWidth={1.6} />
+                      <span>{link.label}</span>
+                    </a>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+      {currentView === 'blog' && (
+        <button
+          type="button"
+          onClick={handleFloatingLockClick}
+          aria-label={isEditorUnlocked ? 'Lock editor' : 'Unlock editor'}
+          className="fixed bottom-24 right-5 z-40 flex size-14 items-center justify-center rounded-full border border-white/60 bg-white/60 text-slate-900 shadow-[0_10px_30px_rgba(15,23,42,0.15)] backdrop-blur-2xl transition hover:bg-white/80 active:scale-95 sm:bottom-28 sm:right-6"
+        >
+          {isEditorUnlocked ? <Unlock className="size-6 text-blue-700" strokeWidth={1.6} /> : <Lock className="size-6 text-blue-700" strokeWidth={1.6} />}
+        </button>
+      )}
+      {currentView === 'blog' && showLockPrompt && !isEditorUnlocked && (
+        <div className="fixed bottom-[190px] right-5 z-40 w-[300px] rounded-2xl border border-white/70 bg-white/80 p-4 shadow-[0_15px_40px_rgba(15,23,42,0.15)] backdrop-blur-2xl sm:right-6 sm:bottom-[210px]">
+          <p className="mb-3 text-sm font-medium text-slate-700">Enter editor password</p>
+          <div className="flex flex-col gap-3">
+            <Input
+              type="password"
+              placeholder="••••••••"
+              value={editorPassword}
+              onChange={(e) => setEditorPassword(e.target.value)}
+              className="bg-white/90"
+            />
+            <div className="flex gap-2">
+              <Button onClick={handleUnlockEditor} className="flex-1 bg-blue-600 text-white hover:bg-blue-700">
+                Unlock
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className="flex-1 text-slate-600 hover:text-slate-900"
+                onClick={() => {
+                  setShowLockPrompt(false);
+                  setEditorPassword('');
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+      <motion.nav
+        className="fixed top-0 left-0 right-0 z-50"
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.6 }}
+      >
+        <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-3">
+          <div className="relative">
+            <div className="flex items-center justify-between rounded-2xl border border-white/40 bg-white/30 px-4 py-2 sm:px-6 shadow-[0_8px_32px_rgba(15,23,42,0.08)] backdrop-blur-2xl">
+              <div className="flex items-center gap-3">
+                <div className="flex size-12 items-center justify-center overflow-hidden rounded-2xl bg-white/60 shadow-inner">
+                  <div className="scale-[0.45]">
+                    <LogoMarkV />
+                  </div>
+                </div>
+                <span className="hidden sm:block font-['Inter',sans-serif] text-sm tracking-[0.3em] text-slate-700 uppercase">
+                  Glacia
+                </span>
+              </div>
+              <div className="hidden md:flex flex-1 items-center justify-center gap-6 text-sm font-medium text-slate-700 -translate-x-[20px] transform">
+                {navLinks.map((link) => (
+                  <button
+                    key={link.target}
+                    type="button"
+                    onClick={() => handleNavClick(link.target)}
+                    className="transition hover:text-slate-900"
+                  >
+                    {link.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={handleGoToBlog}
+                  className={`transition hover:text-slate-900 ${currentView === 'blog' ? 'text-slate-900 font-semibold' : ''}`}
+                >
+                  Blogs
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  aria-expanded={isMenuOpen}
+                  aria-label="Toggle navigation"
+                  className="md:hidden flex size-10 items-center justify-center rounded-xl border border-white/60 bg-white/60 text-slate-700 transition hover:bg-white"
+                  onClick={() => setIsMenuOpen((prev) => !prev)}
+                >
+                  <span className="relative block h-[14px] w-5">
+                    <span
+                      className={`absolute left-0 block h-[2px] w-full rounded-full bg-current transition-all duration-300 ${
+                        isMenuOpen ? 'top-1/2 rotate-45' : 'top-0'
+                      }`}
+                    />
+                    <span
+                      className={`absolute left-0 block h-[2px] w-full rounded-full bg-current transition-all duration-300 ${
+                        isMenuOpen ? 'opacity-0' : 'top-1/2 -translate-y-1/2'
+                      }`}
+                    />
+                    <span
+                      className={`absolute left-0 block h-[2px] w-full rounded-full bg-current transition-all duration-300 ${
+                        isMenuOpen ? 'top-1/2 -rotate-45' : 'bottom-0'
+                      }`}
+                    />
+                  </span>
+                </button>
+                <Button
+                  onClick={handleLogin}
+                  className="hidden md:inline-flex bg-blue-600 text-white hover:bg-blue-700"
+                >
+                  Demo
+                </Button>
+              </div>
+            </div>
+            <AnimatePresence>
+              {isMenuOpen && (
+                <motion.div
+                  key="mobile-menu"
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.2 }}
+                  className="mt-3 rounded-2xl border border-white/40 bg-white/70 p-4 shadow-[0_20px_45px_rgba(15,23,42,0.12)] backdrop-blur-2xl md:hidden"
+                >
+                  <div className="flex flex-col gap-3 text-base font-medium text-slate-800">
+                    {navLinks.map((link) => (
+                      <button
+                        key={`mobile-${link.target}`}
+                        type="button"
+                        onClick={() => handleNavClick(link.target)}
+                        className="rounded-xl px-3 py-2 text-left hover:bg-white"
+                      >
+                        {link.label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleGoToBlog();
+                        setIsMenuOpen(false);
+                      }}
+                      className={`rounded-xl px-3 py-2 text-left hover:bg-white ${currentView === 'blog' ? 'text-slate-900 font-semibold' : ''}`}
+                    >
+                      Blogs
+                    </button>
+                    <Button
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        handleLogin();
+                      }}
+                      className="bg-blue-600 text-white hover:bg-blue-700"
+                    >
+                      Demo
+                    </Button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+      </motion.nav>
+
+      {currentView === 'landing' && (
+        <>
       {/* Hero Section */}
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-20 sm:py-28 lg:py-36">
+      <div id="hero" data-snap-section="true" className="container mx-auto px-4 sm:px-6 lg:px-8 pt-20 sm:pt-24 lg:pt-32 pb-16 sm:pb-20 lg:pb-24">
         <div className="max-w-4xl mx-auto">
           {/* Logo */}
           <motion.div 
-            className="w-48 h-48 sm:w-64 sm:h-64 mx-auto mb-12 sm:mb-16"
+            className="mx-auto mb-6 sm:mb-10 h-[clamp(120px,40vw,256px)] w-[clamp(120px,40vw,256px)]"
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8 }}
@@ -108,11 +800,41 @@ export default function App() {
             <LogoMarkV />
           </motion.div>
 
-          <div className="mb-10 -mt-10 flex justify-center">
-            <div className="font-['Inter:Light',sans-serif] font-light text-[160px] leading-none text-black">
-              Glacia
-            </div>
-          </div>
+          <motion.div
+            className="mb-8 -mt-8 sm:-mt-10 lg:-mt-12 flex justify-center"
+            initial={{ opacity: 0, y: 30, filter: 'blur(12px)' }}
+            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+            transition={{ duration: 0.8, delay: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+          >
+            <motion.div
+              className="font-['Inter:Light',sans-serif] font-light leading-none text-black text-[clamp(72px,18vw,160px)]"
+              animate={{ scale: [0.98, 1, 0.995, 1], letterSpacing: ['-1px', '-0.5px', '-1px', '-0.8px'] }}
+              transition={{ duration: 6, repeat: Infinity, repeatType: 'mirror' }}
+            >
+              <motion.div
+                className="relative inline-flex"
+                initial="hidden"
+                animate="visible"
+                variants={wordReveal}
+              >
+                {glaciaLetters.map((letter, index) => (
+                  <motion.span
+                    key={`${letter}-${index}`}
+                    className="inline-block"
+                    variants={letterLazy}
+                  >
+                    {letter}
+                  </motion.span>
+                ))}
+                <motion.span
+                  className="pointer-events-none absolute inset-0 bg-gradient-to-r from-transparent via-white/70 to-transparent mix-blend-overlay"
+                  initial={{ x: '-80%' }}
+                  animate={{ x: '80%' }}
+                  transition={{ duration: 2.6, repeat: Infinity, ease: 'linear' }}
+                />
+              </motion.div>
+            </motion.div>
+          </motion.div>
 
           {/* Hero Content */}
           <motion.div 
@@ -124,75 +846,54 @@ export default function App() {
             <h1 className="mb-6 sm:mb-8 bg-gradient-to-r from-blue-600 to-cyan-400 bg-clip-text text-transparent leading-tight">
               Store Your Memories Forever,<br />On Your Terms
             </h1>
-            <div className="mb-8 flex flex-col items-center gap-3">
-              <div className="flex flex-wrap items-center justify-center gap-4">
-                <span className="font-['Dancing_Script',cursive] text-3xl text-[#4d4d4d]">
-                  Check the demo
-                </span>
-                <motion.span
-                  className="flex items-center gap-1 text-blue-700"
-                  animate={{ scaleX: [0.7, 1, 0.8] }}
-                  transition={{ duration: 1.2, repeat: Infinity }}
-                  style={{ transformOrigin: 'left center' }}
-                >
-                  <span className="h-1 w-16 rounded-full bg-gradient-to-r from-blue-400 via-blue-500 to-transparent" />
-                  <span className="text-2xl">➜</span>
-                </motion.span>
-                <Button
-                  onClick={handleLogin}
-                  className="bg-blue-600 text-white hover:bg-blue-700"
-                >
-                  Demo
-                </Button>
-              </div>
-            </div>
-
             <p className="text-gray-600 max-w-2xl mx-auto mb-6 leading-relaxed">
               Glacia empowers you to preserve your precious memories with long-term storage solutions that don't break the bank. 
               Install on your own infrastructure with plug-and-play simplicity.
             </p>
 
             {/* Waitlist Form */}
-            {!isSubmitted ? (
-              <form onSubmit={handleSubmit} className="max-w-md mx-auto mb-4">
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <Input
-                    type="email"
-                    placeholder="Enter your email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
-                    className="flex-1"
-                  />
-                  <Button type="submit" className="bg-blue-600 hover:bg-blue-700">
-                    Join Waitlist
-                  </Button>
-                </div>
-              </form>
-            ) : (
-              <motion.div 
-                className="max-w-md mx-auto mb-4 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center gap-2 justify-center text-green-700"
-                initial={{ scale: 0.8 }}
-                animate={{ scale: 1 }}
-                transition={{ type: "spring" }}
-              >
-                <IconPlaceholder label="OK" className="size-5 border-green-200 text-green-700 bg-green-50" />
-                <span>You're on the list! We'll be in touch soon.</span>
-              </motion.div>
-            )}
+            <div id="waitlist">
+              {!isSubmitted ? (
+                <form onSubmit={handleSubmit} className="max-w-md mx-auto mb-4">
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <Input
+                      type="email"
+                      placeholder="Enter your email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
+                      className="flex-1"
+                    />
+                    <Button type="submit" className="bg-blue-600 hover:bg-blue-700">
+                      Join Waitlist
+                    </Button>
+                  </div>
+                </form>
+              ) : (
+                <motion.div 
+                  className="max-w-md mx-auto mb-4 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center gap-2 justify-center text-green-700"
+                  initial={{ scale: 0.8 }}
+                  animate={{ scale: 1 }}
+                  transition={{ type: "spring" }}
+                >
+                  <IconPlaceholder label="OK" className="size-5 border-green-200 text-green-700 bg-green-50" />
+                  <span>You're on the list! We'll be in touch soon.</span>
+                </motion.div>
+              )}
+            </div>
             <p className="text-gray-500 text-sm">
-              Join thousands waiting for early access
+              Join our waiting list for early access
             </p>
           </motion.div>
         </div>
       </div>
 
       {/* Features Section */}
-      <div className="bg-white py-16 sm:py-20 lg:py-24">
+      <div id="features" data-snap-section="true" className="bg-white py-16 sm:py-20 lg:py-24">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
           <div className="max-w-5xl mx-auto">
             <motion.h2 
-              className="text-center mb-12 sm:mb-16 text-gray-900"
+              className="text-center mb-12 sm:mb-16 text-gray-900 text-4xl sm:text-5xl font-semibold"
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
@@ -212,7 +913,7 @@ export default function App() {
                   <Card className="p-6 lg:p-8 hover:shadow-lg transition-shadow h-full">
                     <div className="flex items-start gap-4">
                       <div className="p-3 rounded-lg bg-blue-600 text-white shrink-0">
-                        <IconPlaceholder label={feature.iconLabel} className="size-6 text-white border-white/40 bg-transparent" />
+                        <feature.icon className="size-6 text-white" strokeWidth={1.6} />
                       </div>
                       <div className="flex-1">
                         <h3 className="mb-3 text-gray-900 leading-tight">
@@ -232,11 +933,11 @@ export default function App() {
       </div>
 
       {/* UI Showcase Section */}
-      <div className="py-16 sm:py-20 lg:py-24 bg-gray-50">
+      <div id="showcase" data-snap-section="true" className="py-16 sm:py-20 lg:py-24 bg-gray-50">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
           <div className="max-w-6xl mx-auto">
             <motion.h2 
-              className="text-center mb-6 sm:mb-8 text-gray-900"
+              className="text-center mb-6 sm:mb-8 text-gray-900 text-4xl sm:text-5xl font-semibold"
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
@@ -255,65 +956,60 @@ export default function App() {
               Manage your memories with ease, wherever you are.
             </motion.p>
             
-            <div className="grid lg:grid-cols-2 gap-8 lg:gap-12 items-center">
-              {/* Mobile Preview */}
-              <motion.div
-                initial={{ opacity: 0, x: -30 }}
-                whileInView={{ opacity: 1, x: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 0.8 }}
-                className="order-2 lg:order-1"
-              >
-                <Card className="p-6 lg:p-8 bg-white">
-                  <h3 className="mb-4 text-gray-900">Mobile First</h3>
-                  <p className="text-gray-600 mb-6 leading-relaxed">
-                    Access your memories on the go with our responsive mobile interface. 
-                    Upload, organize, and share with just a tap.
-                  </p>
-                  <div className="rounded-lg overflow-hidden shadow-xl">
-                    <ImageWithFallback 
-                      src="https://images.unsplash.com/photo-1605108222700-0d605d9ebafe?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtb2JpbGUlMjBhcHAlMjBpbnRlcmZhY2V8ZW58MXx8fHwxNzYyODIxNDM0fDA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral"
-                      alt="Mobile interface preview"
-                      className="w-full h-auto"
-                    />
-                  </div>
-                </Card>
-              </motion.div>
-
-              {/* Desktop Preview */}
-              <motion.div
-                initial={{ opacity: 0, x: 30 }}
-                whileInView={{ opacity: 1, x: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 0.8 }}
-                className="order-1 lg:order-2"
-              >
-                <Card className="p-6 lg:p-8 bg-white">
-                  <h3 className="mb-4 text-gray-900">Desktop Power</h3>
-                  <p className="text-gray-600 mb-6 leading-relaxed">
-                    Take advantage of the full desktop experience with advanced features, 
-                    batch uploads, and comprehensive management tools.
-                  </p>
-                  <div className="rounded-lg overflow-hidden shadow-xl">
-                    <ImageWithFallback 
-                      src="https://images.unsplash.com/photo-1575388902449-6bca946ad549?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxkZXNrdG9wJTIwZGFzaGJvYXJkJTIwaW50ZXJmYWNlfGVufDF8fHx8MTc2Mjg5ODkwMnww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral"
-                      alt="Desktop interface preview"
-                      className="w-full h-auto"
-                    />
-                  </div>
-                </Card>
-              </motion.div>
-            </div>
+            <Carousel
+              className="relative"
+              opts={{ align: 'center', loop: true }}
+            >
+              <CarouselContent className="-ml-4 pb-10">
+                {showcaseVideos.map((clip, index) => (
+                  <CarouselItem
+                    key={clip.title}
+                    className="pl-4 md:basis-3/4 lg:basis-1/2"
+                  >
+                    <motion.div
+                      initial={{ opacity: 0, y: 25 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true }}
+                      transition={{ duration: 0.6, delay: index * 0.05 }}
+                    >
+                      <Card className="overflow-hidden border border-white/40 bg-white/80 shadow-xl backdrop-blur-lg">
+                        <div className="relative rounded-3xl overflow-hidden bg-white">
+                          <div className="h-[420px] w-full bg-white flex flex-col items-center justify-center text-center px-8">
+                            <p className="text-5xl font-light tracking-[0.4em] mb-4 bg-gradient-to-r from-blue-600 to-cyan-400 bg-clip-text text-transparent">
+                              GLACIA
+                            </p>
+                            <p className="text-gray-400 uppercase tracking-[0.3em]">
+                              Preview Coming Soon
+                            </p>
+                          </div>
+                          <div className="absolute inset-x-6 bottom-6 rounded-2xl border border-white/50 bg-white/50 p-6 text-slate-900 shadow-[0_15px_40px_rgba(15,23,42,0.12)] backdrop-blur-2xl">
+                            <p className="mb-2 text-sm uppercase tracking-[0.25em] text-slate-600">
+                              {index + 1 < 10 ? `0${index + 1}` : index + 1}
+                            </p>
+                            <h3 className="text-2xl font-semibold mb-2 text-slate-900">{clip.title}</h3>
+                            <p className="text-slate-700 text-sm leading-relaxed max-w-2xl">
+                              {clip.description}
+                            </p>
+                          </div>
+                        </div>
+                      </Card>
+                    </motion.div>
+                  </CarouselItem>
+                ))}
+              </CarouselContent>
+              <CarouselPrevious className="hidden sm:flex bg-white/80 text-slate-900 hover:bg-white" />
+              <CarouselNext className="hidden sm:flex bg-white/80 text-slate-900 hover:bg-white" />
+            </Carousel>
           </div>
         </div>
       </div>
 
       {/* Technologies Section */}
-      <div className="bg-white py-16 sm:py-20 lg:py-24">
+      <div data-snap-section="true" ref={techSectionRef} className="bg-white py-16 sm:py-20 lg:py-24">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
           <div className="max-w-5xl mx-auto">
             <motion.h2 
-              className="text-center mb-6 sm:mb-8 text-gray-900"
+              className="text-center mb-6 sm:mb-8 text-gray-900 text-4xl sm:text-5xl font-semibold"
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
@@ -328,14 +1024,18 @@ export default function App() {
               viewport={{ once: true }}
               transition={{ delay: 0.2, duration: 0.6 }}
             >
-              Glacia is powered by modern, battle-tested technologies to ensure 
-              reliability, performance, and scalability.
+              Glacia runs on AWS-native infrastructure—combining Glacier for deep-freeze archives, 
+              S3 for hot retrievals, Terraform-managed deployments, Git-verified workflows, 
+              Dockerized services, and end-to-end TypeScript tooling to keep data protection, 
+              reliability, and scale firmly under your control.
             </motion.p>
             
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-6 sm:gap-8 lg:gap-12">
-              {technologies.map((tech, index) => (
+              {technologies.map((tech, index) => {
+                const TechIcon = tech.icon;
+                return (
                 <motion.div
-                  key={index}
+                  key={tech.name}
                   className="flex flex-col items-center gap-4 p-6 rounded-lg hover:bg-gray-50 transition-colors"
                   initial={{ opacity: 0, scale: 0.8 }}
                   whileInView={{ opacity: 1, scale: 1 }}
@@ -344,22 +1044,22 @@ export default function App() {
                   whileHover={{ scale: 1.05 }}
                 >
                   <div className="text-blue-600">
-                    <IconPlaceholder label={tech.label} className="size-8 border-blue-200 text-blue-600 bg-white" />
+                    <TechIcon className="size-10" strokeWidth={1.5} />
                   </div>
-                  <span className="text-gray-900">{tech.name}</span>
+                  <span className="text-gray-900 text-center text-sm font-medium">{tech.name}</span>
                 </motion.div>
-              ))}
+              )})}
             </div>
           </div>
         </div>
       </div>
 
       {/* How It Works Section */}
-      <div className="py-16 sm:py-20 lg:py-24 bg-gray-50">
+      <div data-snap-section="true" className="py-16 sm:py-20 lg:py-24 bg-gray-50">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
           <div className="max-w-4xl mx-auto">
             <motion.h2 
-              className="text-center mb-12 sm:mb-16 text-gray-900"
+              className="text-center mb-12 sm:mb-16 text-gray-900 text-4xl sm:text-5xl font-semibold"
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
@@ -399,6 +1099,7 @@ export default function App() {
 
       {/* Final CTA */}
       <motion.div 
+        data-snap-section="true"
         className="bg-blue-600 py-16 sm:py-20 lg:py-24"
         initial={{ opacity: 0 }}
         whileInView={{ opacity: 1 }}
@@ -434,13 +1135,255 @@ export default function App() {
       </motion.div>
 
       {/* Footer */}
-      <footer className="bg-gray-900 text-gray-400 py-8 sm:py-12">
+      <footer data-snap-section="true" className="bg-gray-900 text-gray-400 py-8 sm:py-12">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <p className="text-sm leading-relaxed">
             © 2025 Glacia. Your memories, your infrastructure.
           </p>
         </div>
       </footer>
+        </>
+      )}
+
+      {currentView === 'blog' && (
+        <div className="bg-gradient-to-b from-white via-slate-50 to-blue-50/40 min-h-screen flex flex-col">
+          <div className="container mx-auto px-4 sm:px-6 lg:px-8 pt-28 pb-24 flex-1 w-full">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6 }}
+              className="max-w-3xl mx-auto text-center mb-16"
+            >
+              <p className="text-sm uppercase tracking-[0.5em] text-blue-600 mb-3">Glacia Journal</p>
+              <h1 className="text-4xl sm:text-5xl font-semibold text-slate-900 mb-4">
+                Stories, Releases, and Infrastructure Notes
+              </h1>
+              <p className="text-slate-600">
+                Dive into product updates, storage strategies, and behind-the-scenes drops curated directly by the Glacia team.
+              </p>
+            </motion.div>
+
+            <div className="max-w-5xl mx-auto space-y-8">
+              {articles.length === 0 ? (
+                <Card className="p-8 text-center bg-white/80 backdrop-blur border border-slate-100 shadow-sm">
+                  <p className="text-slate-500">No articles yet. Check back soon for fresh updates.</p>
+                </Card>
+              ) : (
+                <div className="grid gap-6">
+                  {articles.map((article) => (
+                    <Card key={article.id} className="overflow-hidden border border-slate-100 bg-white shadow-sm">
+                      <div className="p-6 space-y-4">
+                        <div className="text-xs uppercase tracking-[0.4em] text-blue-600">
+                          {formatArticleDate(article.createdAt)}
+                        </div>
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <h3 className="text-2xl font-semibold text-slate-900">{article.title}</h3>
+                          </div>
+                          {isEditorUnlocked && (
+                            <div className="flex gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="text-blue-600 border-blue-200 hover:bg-blue-50"
+                                onClick={() => {
+                                  setArticleDraft({
+                                    title: article.title,
+                                    contentHtml: article.contentHtml,
+                                    imageUrl: article.imageUrl,
+                                    videoUrl: article.videoUrl,
+                                    authorName: article.authorName,
+                                    authorTitle: article.authorTitle,
+                                    authorAvatar: article.authorAvatar,
+                                  });
+                                  setEditingArticleId(article.id);
+                                  setIsEditorUnlocked(true);
+                                  scrollToEditor();
+                                }}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="text-red-600 border-red-200 hover:bg-red-50"
+                                onClick={() => {
+                                  if (confirm('Delete this article?')) {
+                                    setArticles((prev) => prev.filter((a) => a.id !== article.id));
+                                    if (editingArticleId === article.id) {
+                                      setArticleDraft(createEmptyDraft());
+                                      setEditingArticleId(null);
+                                    }
+                                  }
+                                }}
+                              >
+                                Delete
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3">
+                          {article.authorAvatar ? (
+                            <img
+                              src={article.authorAvatar}
+                              alt={article.authorName}
+                              className="size-12 rounded-full object-cover border border-slate-100"
+                            />
+                          ) : (
+                            <div className="flex size-12 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-600">
+                              {getInitials(article.authorName)}
+                            </div>
+                          )}
+                          <div>
+                            <p className="font-medium text-slate-900">{article.authorName}</p>
+                            {article.authorTitle && (
+                              <p className="text-sm text-slate-500">{article.authorTitle}</p>
+                            )}
+                          </div>
+                        </div>
+                        {article.imageUrl && (
+                          <div className="rounded-2xl overflow-hidden border border-slate-100">
+                            <img src={article.imageUrl} alt={article.title} className="w-full h-72 object-cover" />
+                          </div>
+                        )}
+                        {article.videoUrl && (
+                          <div className="rounded-2xl overflow-hidden border border-slate-100">
+                            <video controls className="w-full" poster={article.imageUrl || undefined}>
+                              <source src={article.videoUrl} />
+                              Your browser does not support the video tag.
+                            </video>
+                          </div>
+                        )}
+                        <div
+                          className="prose prose-slate max-w-none text-slate-700"
+                          dangerouslySetInnerHTML={{ __html: article.contentHtml }}
+                        />
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              )}
+
+      <div ref={editorSectionRef}>
+      {isEditorUnlocked && (
+        <div className="rounded-3xl border border-slate-200 bg-white/80 backdrop-blur p-6 sm:p-8 shadow-lg space-y-6">
+          <form className="space-y-5" onSubmit={handlePublishArticle}>
+            <div className="flex items-center justify-between gap-4">
+              <h2 className="text-lg font-semibold text-slate-900">
+                {editingArticleId ? 'Edit Article' : 'New Article'}
+              </h2>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={handleLockEditor}
+                className="text-slate-600 hover:text-slate-900"
+              >
+                <Lock className="mr-2 size-4" />
+                Lock Editor
+              </Button>
+            </div>
+                    <div className="grid gap-4">
+                      <div className="grid gap-2">
+                        <label className="text-sm font-medium text-slate-700">Title</label>
+                        <Input
+                          value={articleDraft.title}
+                          onChange={(e) => setArticleDraft((prev) => ({ ...prev, title: e.target.value }))}
+                          placeholder="Enter article title"
+                          required
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <label className="text-sm font-medium text-slate-700">Content</label>
+                        <RichTextEditor
+                          value={articleDraft.contentHtml}
+                          onChange={(html) => setArticleDraft((prev) => ({ ...prev, contentHtml: html }))}
+                          placeholder="Write your story..."
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <label className="text-sm font-medium text-slate-700">Image URL (optional)</label>
+                        <Input
+                          type="url"
+                          value={articleDraft.imageUrl}
+                          onChange={(e) => setArticleDraft((prev) => ({ ...prev, imageUrl: e.target.value }))}
+                          placeholder="https://"
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <label className="text-sm font-medium text-slate-700">Video URL (optional)</label>
+                        <Input
+                          type="url"
+                          value={articleDraft.videoUrl}
+                          onChange={(e) => setArticleDraft((prev) => ({ ...prev, videoUrl: e.target.value }))}
+                          placeholder="https://"
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <label className="text-sm font-medium text-slate-700">Author Name</label>
+                        <Input
+                          value={articleDraft.authorName}
+                          onChange={(e) => setArticleDraft((prev) => ({ ...prev, authorName: e.target.value }))}
+                          placeholder="Jane Doe"
+                          required
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <label className="text-sm font-medium text-slate-700">Author Title (optional)</label>
+                        <Input
+                          value={articleDraft.authorTitle}
+                          onChange={(e) => setArticleDraft((prev) => ({ ...prev, authorTitle: e.target.value }))}
+                          placeholder="Glacia Contributor"
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <label className="text-sm font-medium text-slate-700">Author Avatar URL (optional)</label>
+                        <Input
+                          type="url"
+                          value={articleDraft.authorAvatar}
+                          onChange={(e) => setArticleDraft((prev) => ({ ...prev, authorAvatar: e.target.value }))}
+                          placeholder="https://"
+                        />
+                      </div>
+                    </div>
+                    <Button type="submit" className="bg-blue-600 text-white hover:bg-blue-700">
+                      {editingArticleId ? 'Update Article' : 'Publish Article'}
+                    </Button>
+                  </form>
+                </div>
+              )}
+              </div>
+            </div>
+          </div>
+          <footer className="mt-auto bg-gray-900 text-gray-400 py-8 sm:py-10">
+            <div className="container mx-auto px-4 sm:px-6 lg:px-8 text-center">
+              <p className="text-sm">© 2025 Glacia. Built for creators who own their data.</p>
+            </div>
+          </footer>
+        </div>
+      )}
+
+      {showLottie && (
+        <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-white/40 backdrop-blur-2xl">
+          <div className="absolute inset-0 bg-gradient-to-br from-white/70 via-cyan-100/70 to-blue-100/80 opacity-80 pointer-events-none" />
+          <div className="relative z-10 flex flex-col items-center gap-4 text-gray-900">
+            <div className="text-2xl font-semibold uppercase tracking-[0.3em] text-blue-700 drop-shadow">
+              Success Lottie
+            </div>
+            <LottiePlayer
+              src="/success-lottie.json"
+              background="transparent"
+              style={{ width: '100vw', height: '100vh' }}
+              autoplay
+              loop
+            />
+            <Button variant="secondary" onClick={() => setShowLottie(false)} className="text-blue-700">
+              Close
+            </Button>
+          </div>
+        </div>
+      )}
       <Toaster richColors position="top-center" />
     </div>
   );

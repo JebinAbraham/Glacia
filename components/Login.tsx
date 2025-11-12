@@ -4,7 +4,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card } from './ui/card';
 import LogoMarkV from '../imports/LogoMarkV1';
-import { IconPlaceholder } from './IconPlaceholder';
+import { ArrowLeft } from 'lucide-react';
 
 interface LoginProps {
   onLogin: () => void;
@@ -31,12 +31,8 @@ export function Login({ onLogin, onBack }: LoginProps) {
         transition={{ duration: 0.5 }}
         className="w-full max-w-md"
       >
-        <Button
-          variant="ghost"
-          onClick={onBack}
-          className="mb-6"
-        >
-          <IconPlaceholder label="BK" className="size-4 mr-2 border-blue-200 text-blue-600 bg-white" />
+        <Button variant="ghost" onClick={onBack} className="mb-6">
+          <ArrowLeft className="size-4 mr-2" />
           Back to Home
         </Button>
 

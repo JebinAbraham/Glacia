@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 278 261" fill="none" role="img" aria-label="Glacia icon">
+  <rect width="278" height="261" rx="48" fill="url(#bg)" />
+  <path
+    d="M218.806 150.414L269.574 238.833C273.616 245.873 267.762 254.446 259.742 253.187C237.709 249.727 202.38 243.986 180.629 239.462C167.472 236.726 153.808 232.948 141.637 226.581M141.251 6.87567L8.23883 233.6C4.34781 240.233 9.34618 248.541 17.0286 248.21L126.567 243.496C129.859 243.354 132.855 241.552 134.522 238.709L141.637 226.581M141.251 6.87567L199.373 119.21C200.904 122.17 200.81 125.708 199.124 128.582L141.637 226.581M141.251 6.87567C141.251 6.87567 96.1584 127.184 103.324 173.009C107.669 200.8 122.88 216.767 141.637 226.581"
+    stroke="url(#mark)"
+    stroke-width="17"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="278" y2="261" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F5FBFF" />
+      <stop offset="1" stop-color="#DBEAFE" />
+    </linearGradient>
+    <linearGradient id="mark" x1="94.2489" y1="-118.504" x2="386.262" y2="66.7344" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#93FAEE" />
+      <stop offset="0.52" stop-color="#0C10FF" />
+    </linearGradient>
+  </defs>
+</svg>

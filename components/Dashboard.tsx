@@ -1,22 +1,32 @@
-import { useState } from 'react';
 import { motion } from 'motion/react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import LogoMarkV from '../imports/LogoMarkV1';
-import { IconPlaceholder } from './IconPlaceholder';
+import {
+  Database,
+  Image as ImageIcon,
+  RefreshCw,
+  Activity,
+  UploadCloud,
+  FolderOpen,
+  Settings2,
+  PlaySquare,
+  Clock3,
+  LogOut,
+  DollarSign,
+  CalendarDays,
+} from 'lucide-react';
 
 interface DashboardProps {
   onLogout: () => void;
 }
 
 export function Dashboard({ onLogout }: DashboardProps) {
-  const [activeTab, setActiveTab] = useState('dashboard');
-
   const stats = [
-    { label: 'Total Storage', value: '2.4 TB', iconLabel: 'STR', trend: '+12%' },
-    { label: 'Memories Stored', value: '1,248', iconLabel: 'MMR', trend: '+24' },
-    { label: 'Active Backups', value: '3', iconLabel: 'BKP', trend: 'Active' },
-    { label: 'Uptime', value: '99.9%', iconLabel: 'UPT', trend: '30 days' },
+    { label: 'Cold Storage (Glacier)', value: '2.4 TB', trend: '+12%', icon: Database, accent: 'text-blue-600 bg-blue-100' },
+    { label: 'Warm Storage (S3 Buckets)', value: '1,248 objects', trend: '+24', icon: ImageIcon, accent: 'text-pink-600 bg-pink-100' },
+    { label: 'Active Backups', value: '3', trend: 'Live', icon: RefreshCw, accent: 'text-teal-600 bg-teal-100' },
+    { label: 'Uptime', value: '99.9%', trend: '30 days', icon: Activity, accent: 'text-amber-600 bg-amber-100' },
   ];
 
   const costInfo = {
@@ -46,10 +56,10 @@ export function Dashboard({ onLogout }: DashboardProps) {
               <div className="w-10 h-10">
                 <LogoMarkV />
               </div>
-              <span className="text-gray-900">Glacia Dashboard</span>
+              <span className="sr-only">Glacia Dashboard</span>
             </div>
             <Button onClick={onLogout} variant="outline">
-              <IconPlaceholder label="OUT" className="size-4 mr-2 border-blue-200 text-blue-600 bg-white" />
+              <LogOut className="size-4 mr-2" />
               Logout
             </Button>
           </div>
@@ -58,38 +68,9 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="grid lg:grid-cols-12 gap-8">
-          {/* Sidebar */}
-          <aside className="lg:col-span-3">
-            <Card className="p-4">
-              <nav className="space-y-2">
-                {[
-                  { id: 'dashboard', label: 'Dashboard', iconLabel: 'DB' },
-                  { id: 'uploads', label: 'Uploads', iconLabel: 'UP' },
-                  { id: 'files', label: 'Files', iconLabel: 'FL' },
-                  { id: 'settings', label: 'Settings', iconLabel: 'CFG' },
-                ].map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => setActiveTab(item.id)}
-                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-                      activeTab === item.id
-                        ? 'bg-blue-600 text-white'
-                        : 'text-gray-600 hover:bg-gray-100'
-                    }`}
-                  >
-                    <IconPlaceholder
-                      label={item.iconLabel}
-                      className={`size-5 ${activeTab === item.id ? 'border-white/40 text-white bg-white/10' : 'border-blue-200 text-blue-600 bg-white'}`}
-                    />
-                    <span>{item.label}</span>
-                  </button>
-                ))}
-              </nav>
-            </Card>
-          </aside>
 
           {/* Main Content */}
-          <main className="lg:col-span-9">
+          <main className="lg:col-span-12">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -106,17 +87,19 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
               {/* Stats Grid */}
               <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-                {stats.map((stat, index) => (
+                {stats.map((stat, index) => {
+                  const StatIcon = stat.icon;
+                  return (
                   <motion.div
-                    key={index}
+                    key={stat.label}
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.1, duration: 0.5 }}
                   >
                     <Card className="p-6">
                       <div className="flex items-center justify-between mb-4">
-                        <div className="p-2 bg-blue-100 text-blue-600 rounded-lg">
-                          <IconPlaceholder label={stat.iconLabel} className="size-5 border-blue-200 text-blue-600 bg-white" />
+                        <div className={`p-2 rounded-lg ${stat.accent}`}>
+                          <StatIcon className="size-5" />
                         </div>
                         <span className="text-sm text-green-600">{stat.trend}</span>
                       </div>
@@ -126,7 +109,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                       <div className="text-sm text-gray-600">{stat.label}</div>
                     </Card>
                   </motion.div>
-                ))}
+                )})}
               </div>
 
               {/* Cost & Billing Section */}
@@ -140,7 +123,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   <Card className="p-6">
                     <div className="flex items-center gap-3 mb-6">
                       <div className="p-3 bg-green-100 text-green-600 rounded-lg">
-                        <IconPlaceholder label="$$$" className="size-6 border-green-200 text-green-600 bg-white" />
+                        <DollarSign className="size-6" />
                       </div>
                       <div>
                         <h3 className="text-gray-900">Current Month Cost</h3>
@@ -170,7 +153,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   <Card className="p-6">
                     <div className="flex items-center gap-3 mb-6">
                       <div className="p-3 bg-blue-100 text-blue-600 rounded-lg">
-                        <IconPlaceholder label="CAL" className="size-6 border-blue-200 text-blue-600 bg-white" />
+                        <CalendarDays className="size-6" />
                       </div>
                       <div>
                         <h3 className="text-gray-900">Next Billing Date</h3>
@@ -204,15 +187,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
                 </h3>
                 <div className="grid sm:grid-cols-3 gap-4">
                   <Button className="bg-blue-600 hover:bg-blue-700 h-auto py-4 flex-col gap-2">
-                    <IconPlaceholder label="UP" className="size-6 border-white/40 text-white bg-white/10" />
+                    <UploadCloud className="size-6" />
                     <span>Upload Files</span>
                   </Button>
                   <Button variant="outline" className="h-auto py-4 flex-col gap-2">
-                    <IconPlaceholder label="FL" className="size-6 border-blue-200 text-blue-600 bg-white" />
+                    <FolderOpen className="size-6 text-blue-600" />
                     <span>Browse Files</span>
                   </Button>
                   <Button variant="outline" className="h-auto py-4 flex-col gap-2">
-                    <IconPlaceholder label="CFG" className="size-6 border-blue-200 text-blue-600 bg-white" />
+                    <Settings2 className="size-6 text-blue-600" />
                     <span>Configure Backup</span>
                   </Button>
                 </div>
@@ -229,9 +212,11 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   </Button>
                 </div>
                 <div className="space-y-4">
-                  {recentUploads.map((upload, index) => (
+                  {recentUploads.map((upload, index) => {
+                    const TypeIcon = upload.type === 'Video' ? PlaySquare : ImageIcon;
+                    return (
                     <motion.div
-                      key={index}
+                      key={upload.name}
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: index * 0.1, duration: 0.5 }}
@@ -239,7 +224,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                     >
                       <div className="flex items-center gap-4">
                         <div className="p-3 bg-blue-100 text-blue-600 rounded-lg">
-                          <IconPlaceholder label="IMG" className="size-5 border-blue-200 text-blue-600 bg-white" />
+                          <TypeIcon className="size-5" />
                         </div>
                         <div>
                           <div className="text-gray-900 mb-1">{upload.name}</div>
@@ -249,11 +234,11 @@ export function Dashboard({ onLogout }: DashboardProps) {
                         </div>
                       </div>
                       <div className="flex items-center gap-2 text-sm text-gray-500">
-                        <IconPlaceholder label="TM" className="size-4 border-gray-300 text-gray-500 bg-white" />
+                        <Clock3 className="size-4" />
                         <span>{upload.date}</span>
                       </div>
                     </motion.div>
-                  ))}
+                  )})}
                 </div>
               </Card>
             </motion.div>
