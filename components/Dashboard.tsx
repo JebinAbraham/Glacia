@@ -49,7 +49,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-white border-b sticky top-0 z-50">
+      <header className="sticky top-0 z-50 border-b border-white/40 bg-white/30 shadow-[0_12px_35px_rgba(15,23,42,0.12)] backdrop-blur-2xl">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">

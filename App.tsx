@@ -12,6 +12,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import Lenis from 'lenis';
 import { Login } from './components/Login';
 import { Dashboard } from './components/Dashboard';
+import { NotFound } from './components/NotFound';
 import { Toaster } from './components/ui/sonner';
 import { IconPlaceholder } from './components/IconPlaceholder';
 const RichTextEditor = lazy(() => import('./components/RichTextEditor'));
@@ -22,7 +23,7 @@ import { CustomCursor } from './components/CustomCursor';
 const LottiePlayer = 'lottie-player' as any;
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
-type View = 'landing' | 'login' | 'dashboard' | 'blog';
+type View = 'landing' | 'login' | 'dashboard' | 'blog' | 'not-found';
 type Article = {
   id: string;
   title: string;
@@ -262,8 +263,29 @@ const migrateLegacyData = (db: Database) => {
   }
 };
 
+const pathToView = (path: string): View | null => {
+  const normalized = path.replace(/\/+$/, '') || '/';
+  switch (normalized) {
+    case '/':
+      return null;
+    case '/blog':
+      return 'blog';
+    case '/demo':
+      return 'login';
+    case '/dashboard':
+      return 'dashboard';
+    case '/404':
+      return 'not-found';
+    default:
+      return null;
+  }
+};
+
 const getInitialView = (): View => {
   if (typeof window === 'undefined') return 'landing';
+  const pathView = pathToView(window.location.pathname);
+  if (pathView === 'not-found') return 'not-found';
+  if (pathView) return pathView;
   const stored = window.sessionStorage.getItem(VIEW_STORAGE_KEY);
   if (stored === 'landing' || stored === 'login' || stored === 'dashboard' || stored === 'blog') {
     return stored;
@@ -473,6 +495,21 @@ export default function App() {
     if (typeof window !== 'undefined') {
       window.sessionStorage.setItem(VIEW_STORAGE_KEY, currentView);
     }
+
+    if (typeof window !== 'undefined') {
+      const viewToPath: Partial<Record<View, string>> = {
+        landing: '/',
+        blog: '/blog',
+        login: '/demo',
+        dashboard: '/dashboard',
+        'not-found': '/404',
+      };
+      const desiredPath = viewToPath[currentView];
+      if (desiredPath && window.location.pathname !== desiredPath) {
+        window.history.replaceState(null, '', desiredPath);
+      }
+    }
+
     if (currentView === 'landing') {
       setCursorVersion((prev) => prev + 1);
     }
@@ -893,6 +930,10 @@ export default function App() {
   // Render Dashboard
   if (currentView === 'dashboard') {
     return <Dashboard onLogout={handleLogout} />;
+  }
+
+  if (currentView === 'not-found') {
+    return <NotFound onBackHome={handleBackToLanding} />;
   }
 
   // Render Landing Page
