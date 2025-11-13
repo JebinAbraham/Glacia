@@ -44,6 +44,7 @@ type WaitlistEntry = {
 const BLOG_EDITOR_PASSWORD_HASH = '1a7bf9ce919484c0709c54b0c9a263347813fcd77f67ed9f4f2d9b7381147554';
 const DB_ENCRYPTION_SECRET = 'e59680c4e9c618379cacd3cd8f6344e353d2177c4d2d5638b9070d41e1d52bbf';
 const DB_STORAGE_KEY = 'glacia_sqlite_db';
+const VIEW_STORAGE_KEY = 'glacia_current_view';
 const LEGACY_WAITLIST_STORAGE_KEY = 'waitlist';
 const LEGACY_ARTICLES_STORAGE_KEY = 'glaciaArticles';
 
@@ -261,11 +262,20 @@ const migrateLegacyData = (db: Database) => {
   }
 };
 
+const getInitialView = (): View => {
+  if (typeof window === 'undefined') return 'landing';
+  const stored = window.sessionStorage.getItem(VIEW_STORAGE_KEY);
+  if (stored === 'landing' || stored === 'login' || stored === 'dashboard' || stored === 'blog') {
+    return stored;
+  }
+  return 'landing';
+};
+
 export default function App() {
   const [email, setEmail] = useState('');
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [waitlistEntries, setWaitlistEntries] = useState<WaitlistEntry[]>([]);
-  const [currentView, setCurrentView] = useState<View>('landing');
+  const [currentView, setCurrentView] = useState<View>(() => getInitialView());
   const [showLottie, setShowLottie] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showQuickLinks, setShowQuickLinks] = useState(false);
@@ -460,9 +470,26 @@ export default function App() {
   }, [currentView]);
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem(VIEW_STORAGE_KEY, currentView);
+    }
     if (currentView === 'landing') {
       setCursorVersion((prev) => prev + 1);
     }
+  }, [currentView]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const updateSnapMode = () => {
+      const shouldSnap = window.innerWidth <= 768 && currentView === 'landing';
+      document.body.classList.toggle('glacia-snap', shouldSnap);
+    };
+    updateSnapMode();
+    window.addEventListener('resize', updateSnapMode);
+    return () => {
+      window.removeEventListener('resize', updateSnapMode);
+      document.body.classList.remove('glacia-snap');
+    };
   }, [currentView]);
 
   useEffect(() => {
@@ -485,49 +512,94 @@ export default function App() {
 
     const detachInteractionHandlers = () => {
       window.removeEventListener('pointerdown', handleInteraction);
+      window.removeEventListener('pointermove', handleInteraction);
+      window.removeEventListener('touchstart', handleInteraction);
       window.removeEventListener('keydown', handleInteraction);
     };
 
+    const detachEnvironmentHandlers = () => {
+      window.removeEventListener('focus', handleEnvironmentTrigger);
+      window.removeEventListener('pageshow', handleEnvironmentTrigger);
+      document.removeEventListener('visibilitychange', handleVisibilityVisibility);
+    };
+
     const handleInteraction = () => {
-      if (isDisposed) return;
-      detachInteractionHandlers();
-      audio.currentTime = 0;
-      audio.volume = 0.225;
-      audio.muted = false;
-      audio.play().catch((error) => {
-        console.warn('Failed to play welcome audio after interaction', error);
-        attachInteractionHandlers();
-      });
+      if (isDisposed || hasStarted) return;
+      attemptPlayback(false);
     };
 
     const attachInteractionHandlers = () => {
+      if (hasStarted) return;
       detachInteractionHandlers();
-      window.addEventListener('pointerdown', handleInteraction, { once: true });
-      window.addEventListener('keydown', handleInteraction, { once: true });
+      const onceOptions = { once: true } as const;
+      window.addEventListener('pointerdown', handleInteraction, onceOptions);
+      window.addEventListener('pointermove', handleInteraction, onceOptions);
+      window.addEventListener('touchstart', handleInteraction, onceOptions);
+      window.addEventListener('keydown', handleInteraction, onceOptions);
     };
 
-    audio.currentTime = 0;
-    audio.volume = 0.225;
-    audio.muted = true;
-    audio.play()
-      .then(() => {
-        if (isDisposed) return;
-        setTimeout(() => {
-          if (!isDisposed) {
-            audio.muted = false;
+    const handleEnvironmentTrigger = () => {
+      if (document.hidden) return;
+      attemptPlayback(true);
+    };
+
+    const handleVisibilityVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        handleEnvironmentTrigger();
+      }
+    };
+
+    let hasStarted = false;
+
+    const finalizePlayback = () => {
+      hasStarted = true;
+      detachInteractionHandlers();
+      detachEnvironmentHandlers();
+    };
+
+    const attemptPlayback = (allowMuted: boolean) => {
+      if (isDisposed || hasStarted) return;
+      audio.currentTime = 0;
+      audio.volume = 0.225;
+      audio.muted = allowMuted;
+      audio.play()
+        .then(() => {
+          if (isDisposed || hasStarted) return;
+          if (allowMuted) {
+            setTimeout(() => {
+              if (!isDisposed) {
+                audio.muted = false;
+              }
+            }, 120);
           }
-        }, 120);
-        detachInteractionHandlers();
-      })
-      .catch((error) => {
-        console.warn('Autoplay blocked for welcome audio, waiting for interaction', error);
-        audio.muted = false;
-        attachInteractionHandlers();
-      });
+          finalizePlayback();
+        })
+        .catch((error) => {
+          if (!allowMuted) {
+            console.warn('Failed to play welcome audio after interaction', error);
+          } else {
+            console.warn('Autoplay blocked for welcome audio, waiting for interaction', error);
+          }
+          audio.pause();
+          audio.currentTime = 0;
+          audio.muted = false;
+          if (!hasStarted) {
+            attachInteractionHandlers();
+          }
+        });
+    };
+
+    window.addEventListener('focus', handleEnvironmentTrigger);
+    window.addEventListener('pageshow', handleEnvironmentTrigger);
+    document.addEventListener('visibilitychange', handleVisibilityVisibility);
+
+    attemptPlayback(true);
+    attachInteractionHandlers();
 
     return () => {
       isDisposed = true;
       detachInteractionHandlers();
+      detachEnvironmentHandlers();
     };
   }, [currentView]);
 
@@ -1334,7 +1406,11 @@ export default function App() {
       {currentView === 'landing' && (
         <>
       {/* Hero Section */}
-      <div id="hero" data-snap-section="true" className="container mx-auto px-4 sm:px-6 lg:px-8 pt-20 sm:pt-24 lg:pt-32 pb-16 sm:pb-20 lg:pb-24">
+      <div
+        id="hero"
+        data-snap-section="true"
+        className="glacia-snap-section container mx-auto px-4 sm:px-6 lg:px-8 pt-20 sm:pt-24 lg:pt-32 pb-16 sm:pb-20 lg:pb-24"
+      >
         <div className="max-w-4xl mx-auto">
           {/* Logo */}
           <motion.div 
@@ -1435,7 +1511,7 @@ export default function App() {
       </div>
 
       {/* Features Section */}
-      <div id="features" data-snap-section="true" className="bg-white py-16 sm:py-20 lg:py-24">
+      <div id="features" data-snap-section="true" className="glacia-snap-section bg-white py-16 sm:py-20 lg:py-24">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
           <div className="max-w-5xl mx-auto">
             <motion.h2 
@@ -1479,7 +1555,7 @@ export default function App() {
       </div>
 
       {/* UI Showcase Section */}
-      <div id="showcase" data-snap-section="true" className="py-16 sm:py-20 lg:py-24 bg-gray-50">
+      <div id="showcase" data-snap-section="true" className="glacia-snap-section py-16 sm:py-20 lg:py-24 bg-gray-50">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
           <div className="max-w-6xl mx-auto">
             <motion.h2 
@@ -1646,7 +1722,7 @@ export default function App() {
       {/* Final CTA */}
       <motion.div 
         data-snap-section="true"
-        className="bg-blue-600 py-16 sm:py-20 lg:py-24"
+        className="glacia-snap-section bg-blue-600 py-16 sm:py-20 lg:py-24"
         initial={{ opacity: 0 }}
         whileInView={{ opacity: 1 }}
         viewport={{ once: true }}
@@ -1681,7 +1757,7 @@ export default function App() {
       </motion.div>
 
       {/* Footer */}
-      <footer data-snap-section="true" className="bg-gray-900 text-gray-400 py-8 sm:py-12">
+      <footer data-snap-section="true" className="glacia-snap-section bg-gray-900 text-gray-400 py-8 sm:py-12">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <p className="text-sm leading-relaxed">
             © 2025 Glacia. Your memories, your infrastructure.

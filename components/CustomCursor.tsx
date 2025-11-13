@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 interface CustomCursorProps {
   enabled: boolean;
@@ -37,6 +37,14 @@ export function CustomCursor({ enabled }: CustomCursorProps) {
   const trailRefs = useRef<HTMLDivElement[]>([]);
   const trailPositionsRef = useRef<{ x: number; y: number }[]>([]);
   const refreshPendingRef = useRef(false);
+  const isNativeCursorHiddenRef = useRef(false);
+
+  const setNativeCursorHidden = useCallback((shouldHide: boolean) => {
+    if (typeof document === 'undefined') return;
+    if (isNativeCursorHiddenRef.current === shouldHide) return;
+    document.body.style.cursor = shouldHide ? 'none' : '';
+    isNativeCursorHiddenRef.current = shouldHide;
+  }, []);
 
   const setVisibility = (visible: boolean) => {
     const opacity = visible ? '1' : '0';
@@ -68,13 +76,11 @@ export function CustomCursor({ enabled }: CustomCursorProps) {
   useEffect(() => {
     if (!enabled || typeof window === 'undefined' || isCoarsePointer()) {
       setVisibility(false);
-      if (typeof document !== 'undefined') {
-        document.body.style.cursor = '';
-      }
+      setNativeCursorHidden(false);
       return;
     }
 
-    document.body.style.cursor = 'none';
+    setNativeCursorHidden(true);
     setVisibility(false);
     currentRef.current = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
     targetRef.current = { ...currentRef.current };
@@ -196,6 +202,8 @@ export function CustomCursor({ enabled }: CustomCursorProps) {
           : 'transparent';
       }
 
+      setNativeCursorHidden(blendFactor < 0.15);
+
       rafRef.current = requestAnimationFrame(animate);
     };
 
@@ -212,17 +220,17 @@ export function CustomCursor({ enabled }: CustomCursorProps) {
       window.removeEventListener('blur', handleBlur);
       window.removeEventListener('resize', handleResize);
       observer?.disconnect();
-      document.body.style.cursor = '';
+      setNativeCursorHidden(false);
       setVisibility(false);
     };
-  }, [enabled]);
+  }, [enabled, setNativeCursorHidden]);
 
   if (typeof window !== 'undefined' && isCoarsePointer()) {
     return null;
   }
 
   return (
-    <>
+    <div className="pointer-events-none fixed inset-0 z-[9997]">
       {Array.from({ length: TRAIL_LENGTH }).map((_, index) => (
         <div
           key={`cursor-trail-${index}`}
@@ -231,20 +239,20 @@ export function CustomCursor({ enabled }: CustomCursorProps) {
               trailRefs.current[index] = node;
             }
           }}
-          className="pointer-events-none fixed top-0 left-0 z-[9998] rounded-full bg-blue-200/70 blur-2xl transition-opacity duration-200 ease-out"
+          className="pointer-events-none absolute top-0 left-0 z-[9998] rounded-full bg-blue-200/70 blur-2xl transition-opacity duration-200 ease-out"
           style={{ opacity: 0 }}
         />
       ))}
       <div
         ref={outerRef}
-        className="pointer-events-none fixed top-0 left-0 z-[9999] h-9 w-9 rounded-full border-[1.5px] border-blue-500/70 shadow-[0_0_30px_rgba(59,130,246,0.35)] transition-opacity duration-300 ease-out"
+        className="pointer-events-none absolute top-0 left-0 z-[9999] h-9 w-9 rounded-full border-[1.5px] border-blue-500/70 shadow-[0_0_30px_rgba(59,130,246,0.35)] transition-opacity duration-300 ease-out"
         style={{ opacity: 0 }}
       />
       <div
         ref={innerRef}
-        className="pointer-events-none fixed top-0 left-0 z-[10000] h-3 w-3 rounded-full bg-blue-600 shadow-[0_0_20px_rgba(37,99,235,0.45)] transition-opacity duration-300 ease-out"
+        className="pointer-events-none absolute top-0 left-0 z-[10000] h-3 w-3 rounded-full bg-blue-600 shadow-[0_0_20px_rgba(37,99,235,0.45)] transition-opacity duration-300 ease-out"
         style={{ opacity: 0 }}
       />
-    </>
+    </div>
   );
 }

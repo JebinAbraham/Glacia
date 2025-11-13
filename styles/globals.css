@@ -132,3 +132,13 @@
 html {
   font-size: var(--font-size);
 }
+
+.glacia-snap {
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
+}
+
+.glacia-snap .glacia-snap-section {
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
